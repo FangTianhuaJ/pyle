@@ -1,0 +1,8 @@
+Daniel's todo list for benchmarking
+
+Daily bringup report code.
+    -Do it.
+    
+Do a pi pulse tomography experiment
+    -Tomography data retrieval and processing should be streamlined
+    -Produce some kind of report
