@@ -1,5 +1,0 @@
-Simulation of state tomography
-Single qubit
- Automated dataking
- Automated processing
- Automated plotting
