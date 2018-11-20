@@ -23,7 +23,6 @@ from pyle.analysis import readout
 from pyle.pipeline import returnValue, FutureList
 
 
-
 # COLORS
 BLUE   = "#348ABD"
 RED    = "#E24A33"
