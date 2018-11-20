@@ -51,6 +51,7 @@ class func(object):
     def V(self,t):
         return (func().x2(t)/(2*np.sqrt(self.Delta**2/4.0-func().x1(t)**2)))-(np.sqrt(self.Delta**2/4.0-func().x1(t)**2))/np.tan(2*func().x(t))
 
+
 class SwiphtPulse(NumericalPulse):
     @convertUnits(t0='ns', w='ns', phase=None, df='GHz')
     def __init__(self, t0=5, w=29.35, phase=0.0, df=0.0, amp=1.0):
@@ -65,11 +66,11 @@ class SwiphtPulse(NumericalPulse):
         return self.amp*func().V(t-self.t0)* ((t-self.t0)>0) * ((-(t-self.t0)+self.w)>0)
 
 if __name__ == '__main__':
-    time = np.linspace(-50,50,301)
+    T = np.linspace(-50,50,301)
     seq = SwiphtPulse(t0=5, w=29.35, phase=0.0, df=0.0)
     test_env(seq)
     plt.figure()
-    plt.plot(time,seq(time))
+    plt.plot(T,seq(T))
     plt.show()
 
 
