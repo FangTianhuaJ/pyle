@@ -32,14 +32,15 @@ V, mV, us, ns, GHz, MHz, dBm, rad, au = [Unit(s) for s in
                                          ('V', 'mV', 'us', 'ns', 'GHz', 'MHz', 'dBm', 'rad', 'au')]
 
 class lzxPulse(NumericalPulse):
-    @convertUnits(tau0='ns', tau1='ns', taup='ns')
-    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k0=1.0, amp=1.0):
+    @convertUnits(tau0='ns', tau1='ns', taup='ns', amp='GHz', T0='ns')
+    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k0=1.0, amp=1.0, T0=1.0):
         self.q = q
         self.tau0 = tau0  # 'the start time for lzpulse'
         self.tau1 = tau1
         self.taup = taup
         self.k0 = k0
         self.amp = amp
+        self.T0 = T0
         self.tau2 = 3 * tau1 - 2 * tau0
         self.tauc = 2 * tau1 - 2 * tau0 + taup
         self.taue = 4 * tau1 - 3 * tau0  # 'the end time for lzpulse'
@@ -55,17 +56,22 @@ class lzxPulse(NumericalPulse):
         nx4 = -(self.tau1-self.taup/2-self.tau0)*self.k0*1e-3*(t>self.tau2-self.taup/2)*(t<=self.tau2+self.taup/2)
         nx5 = self.k0*1e-3*(t-self.taue)*(t>self.tau2+self.taup/2)*(t<=self.taue)
         nx6 = 0*(t<self.tau0)*(t>self.taue)
-        return self.amp*(nx1+nx2+nx3+nx4+nx5+nx6)
+        nx = self.amp*(nx1+nx2+nx3+nx4+nx5+nx6)/self.T0
+        if max(nx) >= 1.0:
+            print 'maxnx =', np.abs(max(nx))
+            raise ValueError('xAmp should be less than 1.0 GHz')
+        return nx
 
 class lzyPulse(NumericalPulse):
-    @convertUnits(tau0='ns', tau1='ns', taup='ns')
-    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k1=2.0, amp=1.0):
+    @convertUnits(tau0='ns', tau1='ns', taup='ns', amp='GHz', T0='ns')
+    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k1=2.0, amp=1.0, T0=1.0):
         self.q = q
         self.tau0 = tau0  # 'the start time for lzpulse'
         self.tau1 = tau1
         self.taup = taup
         self.k1 = k1
         self.amp = amp
+        self.T0 = T0
         self.tau2 = 3 * tau1 - 2 * tau0
         self.tauc = 2 * tau1 - 2 * tau0 + taup
         self.taue = 4 * tau1 - 3 * tau0  # 'the end time for lzpulse'
@@ -81,17 +87,21 @@ class lzyPulse(NumericalPulse):
         ny4 = -(self.tau1-self.taup/2-self.tau0)*self.k1*1e-3*(t>self.tau2-self.taup/2)*(t<=self.tau2+self.taup/2)
         ny5 = self.k1*1e-3*(t-self.taue)*(t>self.tau2+self.taup/2)*(t<=self.taue)
         ny6 = 0*(t<self.tau0)*(t>self.taue)
-        return self.amp*(ny1+ny2+ny3+ny4+ny5+ny6)
+        ny = self.amp*(ny1+ny2+ny3+ny4+ny5+ny6)/self.T0
+        if max(ny) >= 1.0:
+            print 'maxny =', np.abs(max(ny))
+            raise ValueError('yAmp should be less than 1.0 GHz')
+        return ny
 
 class lzzPulse(NumericalPulse):
-    @convertUnits(tau0='ns', tau1='ns', taup='ns')
-    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k2=1, amp=1.0):
+    @convertUnits(tau0='ns', tau1='ns', taup='ns', T0='ns')
+    def __init__(self, q, tau0=0, tau1=37.5, taup=25, k2=1, T0=1.0):
         self.q = q
         self.tau0 = tau0  # 'the start time for lzpulse'
         self.tau1 = tau1
         self.taup = taup
         self.k2 = k2
-        self.amp = amp
+        self.T0 = T0
         self.tau2 = 3 * tau1 - 2 * tau0
         self.tauc = 2 * tau1 - 2 * tau0 + taup
         self.taue = 4 * tau1 - 3 * tau0  # 'the end time for lzpulse'
@@ -103,9 +113,13 @@ class lzzPulse(NumericalPulse):
     def timeFunc(self, t):
         nz1 = self.k2*1e-3*(t-(self.tau1-self.taup/2))*(t>=self.tau1-self.taup/2)*(t<= self.tau1+self.taup/2)
         nz2 = self.taup*1e-3*self.k2*(t>self.tau1+self.taup/2)*(t<self.tau2-self.taup/2)
-        nz3 = -self.k2*1e-3*(t-(self.tau2+self.taup/2))*(t>self.tau2-self.taup/2)*(t<=self.tau2+self.taup/2)
+        nz3 = -self.k2*1e-3*(t-(self.tau2+self.taup/2))*(t>=self.tau2-self.taup/2)*(t<=self.tau2+self.taup/2)
         nz4  =0*(t<self.tau0)*(t>self.taue)
-        return self.amp*(nz1+nz2+nz3+nz4)
+        nz = (nz1+nz2+nz3+nz4)/self.T0
+        if max(nz) >= 1.5:
+            print 'maxnz =', np.abs(max(nz))
+            raise ValueError('zAmp must be less than 1.5')
+        return nz
 
 class LZ_gate(Gate):
     def __init__(self, agents, tau0=0*ns, tau1=None, taup=None, k0=None, k1=None, k2=None,
@@ -124,7 +138,7 @@ class LZ_gate(Gate):
         if self.taup == None:
             self.taup = agents[0]['lztaup']
         if self.amp == None:
-            self.amp = agents[0]['lzamp']
+            self.amp = agents[0]['lzampxy']
         if self.k0 == None:
             self.k0 = agents[0]['k0']
         if self.k1 == None:
@@ -142,7 +156,7 @@ class LZ_gate(Gate):
         t = ag['_t']
         l = self.taue
         ag['xy'] += eh.mix(ag,eh.piPulse(ag, t+(l/2),state=self.state)+lzxPulse(q=ag, tau0=t, tau1=t+self.tau1, taup=self.taup, k0=self.k0, amp=self.amp)+1j*lzyPulse(q=ag, tau0=t, tau1=t+self.tau1, taup=self.taup, k1=self.k1, amp=self.amp))
-        ag['z'] += lzzPulse(q=ag, tau0=t, tau1=t+self.tau1, taup=self.taup, k2=self.k2, amp=self.amp)
+        ag['z'] += lzzPulse(q=ag, tau0=t, tau1=t+self.tau1, taup=self.taup, k2=self.k2)
         ag['_t'] += l
 
     def _name(self):
@@ -180,7 +194,7 @@ def lztest_amp(Sample, measure=0, amp=st.r[0:1:0.02], stats=1200, name='lz amp t
 
     return data
 
-def lztest_taup(Sample, measure=0, delay=st.r[25:30:0.01,ns], state=1, stats=1200, name='lz taup test',
+def lztest_taup(Sample, measure=0, delay=st.r[25:30:0.05,ns], state=1, stats=1200, name='lz taup test',
                   save=True, noisy=True, prob=True):
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
     axes = [(delay, 'taup')]
@@ -196,7 +210,7 @@ def lztest_taup(Sample, measure=0, delay=st.r[25:30:0.01,ns], state=1, stats=120
         alg = gc.Algorithm(devs)
         q0 = alg.q0
         alg[gates.MoveToState([q0], 0, state-1)]
-        alg[LZ_gate([q0],amp=2,taup=currdelay)]
+        alg[LZ_gate([q0], taup=currdelay)]
         alg[gates.MoveToState([q0], state-1, 0)]
         alg[gates.Measure([q0])]
         alg.compile()
@@ -214,7 +228,41 @@ def lztest_taup(Sample, measure=0, delay=st.r[25:30:0.01,ns], state=1, stats=120
 
     return data
 
-def lztest_theta(Sample, measure=0, theta=st.r[0:2*np.pi:0.1], state=1, stats=1200, name='lz theta test',
+def lztest_tauc(Sample, measure=0, delay=st.r[100:120:0.1,ns], state=1, stats=1200, name='lz tauc test',
+                  save=True, noisy=True, prob=True):
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
+    axes = [(delay, 'tauc')]
+    if prob:
+        deps = readout.genProbDeps(qubits, measure)
+    else:
+        deps = [("Mag", "|%s>" %state, ""), ("Phase", "|%s>" %state, "rad")]
+    kw = {'stats': stats, 'prob': prob}
+
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    def func(server, currdelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        taup = q0['lztaup']
+        currtau1 = (currdelay-taup)/2
+        alg[LZ_gate([q0], tau1=currtau1)]
+        alg[gates.Measure([q0])]
+        alg.compile()
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        if prob:
+            probs = readout.iqToProbs(data, alg.qubits)
+            probs = np.squeeze(probs)
+            returnValue(probs)
+        else:
+            data = readout.parseDataFormat(data, 'iq')
+            mag, phase = readout.iqToPolar(data)
+            returnValue([mag, phase])
+
+    data = sweeps.grid(func, axes=axes, save=save, dataset=dataset, noisy=noisy)
+
+    return data
+
+def lztest_theta(Sample, measure=0, theta=st.r[0:2*np.pi:0.1], state=1, stats=1200, delta=1.0, name='lz theta test',
                   save=True, noisy=True, prob=True):
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
     axes = [(theta, 'Geometric phase')]
@@ -229,11 +277,10 @@ def lztest_theta(Sample, measure=0, theta=st.r[0:2*np.pi:0.1], state=1, stats=12
     def func(server, currphase):
         alg = gc.Algorithm(devs)
         q0 = alg.q0
-        k0 = q0['k0']
-        alg[gates.MoveToState([q0], 0, state)]
-        alg[LZ_gate([q0])]
-        alg[LZ_gate([q0], k1=k0*np.tan(currphase))]
-        alg[gates.MoveToState([q0], state-1, 0)]
+        k0 = np.sqrt(delta**2/(1+np.tan(currphase)**2))
+        #alg[gates.MoveToState([q0], 0, state-1)]
+        alg[LZ_gate([q0], k0=k0, k1=k0*np.tan(currphase))]
+        #alg[gates.MoveToState([q0], state-1, 0)]
         alg[gates.Measure([q0])]
         alg.compile()
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
@@ -251,7 +298,7 @@ def lztest_theta(Sample, measure=0, theta=st.r[0:2*np.pi:0.1], state=1, stats=12
     return data
 
 def lztest_theta_and_taup(Sample, measure=0, taup=st.r[25:30:0.1,ns], theta=st.r[0:2*np.pi:0.1],
-                     state=1, tBuf=0*ns, stats=600, name='lz test theta and taup', save=True, noisy=True):
+                     state=1, tBuf=0*ns, stats=600, delta=1.0, name='lz test theta and taup', save=True, noisy=True):
 
     sample, devs, qubits = gc.loadQubits(Sample, measure)
     axes = [(taup, 'taup'), (theta, 'Geometric phase')]
@@ -263,10 +310,10 @@ def lztest_theta_and_taup(Sample, measure=0, taup=st.r[25:30:0.1,ns], theta=st.r
     def func(server, currdelay, currphase):
         alg = gc.Algorithm(devs)
         q0 = alg.q0
-        k0 = q0['k0']
+        k0 = np.sqrt(delta**2/(1+np.tan(currphase)**2))
         alg[gates.MoveToState([q0], 0, state-1)]
         alg[gates.Wait([q0], waitTime=tBuf)]
-        alg[LZ_gate([q0], taup=currdelay, k1=k0*np.tan(currphase))]
+        alg[LZ_gate([q0], k0=k0, taup=currdelay, k1=k0*np.tan(currphase))]
         alg[gates.Wait([q0], waitTime=tBuf)]
         alg[gates.Measure([q0])]
         alg.compile()
@@ -278,15 +325,61 @@ def lztest_theta_and_taup(Sample, measure=0, taup=st.r[25:30:0.1,ns], theta=st.r
 
     return data
 
+def lztest_theta_with_k2(Sample, measure=0, k2=st.r[0.1:5:0.2], theta=st.r[0:2*np.pi:0.2], delta=5.0,
+                     state=1, tBuf=0*ns, stats=600, name='lz k2', save=True, noisy=True):
+
+    sample, devs, qubits = gc.loadQubits(Sample, measure)
+    axes = [(k2, 'k2'), (theta, 'Geometric phase')]
+    deps = readout.genProbDeps(qubits, measure, range(1+state))
+    kw = {"stats": stats, 'tBuf': tBuf, "state": state}
+    name += ' with delta='+np.str(delta)
+
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    def func(server, currk, currphase):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        k0 = np.sqrt(delta**2/(1+np.tan(currphase)**2))
+        alg[gates.MoveToState([q0], 0, state-1)]
+        alg[gates.Wait([q0], waitTime=tBuf)]
+        alg[LZ_gate([q0], k0=k0, k1=k0*np.tan(currphase), k2=currk)]
+        alg[gates.Wait([q0], waitTime=tBuf)]
+        alg[gates.Measure([q0])]
+        alg.compile()
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = readout.iqToProbs(data, alg.qubits, states=range(1+state))
+        returnValue(np.squeeze(probs))
+
+    data = sweeps.grid(func, axes=axes, save=save, dataset=dataset, noisy=noisy)
+
+    return data
+
+def fittingLZ(data,s0=[0.5]):
+    Theta = data[:,0]
+    P1 = data[:,2]
+    def lzfunc(theta,s):
+        Plz = s
+        return max(P1)-4*Plz*(1-Plz)*(np.sin(theta))**2
+    def residuals(s,y,theta):
+        return y-lzfunc(theta,s)
+    plt.xlabel('Geometric phase')
+    plt.ylabel('P1')
+    value = optimize.leastsq(residuals,s0,args=(P1,Theta))
+    print 'Landau-Zener Transition Probability P-LZ is',value[0][0]
+    plt.scatter(Theta,P1,label='experimental data')
+    plt.plot(Theta,lzfunc(Theta,value[0]),'k',label='fitting data')
+    plt.legend(loc=1)
+    plt.show()
+
 if __name__ == '__main__':
     pulsex = lzxPulse(q=None, tau0=0, tau1=37.5, taup=25, k0=1, amp=1.0)
-    pulsey = lzyPulse(q=None, tau0=0, tau1=37.5, taup=25, k1=2, amp=1.0)
-    pulsez = lzzPulse(q=None, tau0=0, tau1=37.5, taup=25, k2=4, amp=1.0)
-    T = np.linspace(-100, 200, 1001)
-    env.test_env(pulsex)
-    env.test_env(pulsez)
+    pulsey = lzyPulse(q=None, tau0=0, tau1=37.5, taup=25, k1=0.8, amp=1.0)
+    pulsez = lzzPulse(q=None, tau0=0, tau1=37.5, taup=25, k2=0.5)
+    T = np.linspace(0, 150, 1001)
     plt.plot(T, pulsex(T),'-',label='lzx')
     plt.plot(T, pulsey(T),'-.',label='lzy')
     plt.plot(T, pulsez(T),'--',label='lzz')
     plt.legend(loc=1)
+    env.test_env(pulsex)
+    env.test_env(pulsez)
     plt.show()
