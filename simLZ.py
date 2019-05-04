@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pylesim
 import pylesim.quantsim as sim
 import pylesim.plotting as pyplt
 from scipy import optimize
@@ -64,9 +65,10 @@ class lzpulse(object):
             else:
                 m=0
             return m
+            # 1e-3 * k2 * self.taup/2
         return Envelope(timeFunc,start=self.tau0,end=self.taue)
 
-    def pipulse(self,A=np.pi/2,tau=2,phase=0):
+    def pipulse(self,A=np.pi/10,tau=10,phase=0):
         def timeFunc(t):
             value = (0.5*A*(1+np.cos(2*np.pi*(t-self.t0)/tau)) * (((t-self.t0)+tau/2.)>0) \
                     * ((-(t-self.t0)+tau/2.)>0) * np.exp(1j*phase))/np.pi
@@ -74,10 +76,10 @@ class lzpulse(object):
             return val
         return Envelope(timeFunc,start=self.t0-tau/2,end=self.t0+tau/2)
 
-    def plot_lz(self):
+    def plot_lz(self,k0=2,k1=2,k2=1):
         T = np.arange(0,150,0.1)
         lp = lzpulse()
-        x,y,z,p = lp.lzx(k0=2),lp.lzy(k1=2*np.tan(1.2)),lp.lzz(k2=4),lp.pipulse(tau=2)
+        x,y,z,p = lp.lzx(k0=k0),lp.lzy(k1=k1),lp.lzz(k2=k2),lp.pipulse()
         plt.figure()
         plt.xlabel('Time[ns]')
         plt.ylabel('Pulse')
@@ -94,13 +96,15 @@ class method(object):
         self.end = end
         self.step = step
 
-    def H(self,t,kx=10,ky=10,kz=5,tau=2,n=37.5):
+    def H(self,t,kx=4,ky=4,kz=30,A=np.pi/10,tau=10,n=37.5):
         lp = lzpulse(tau0=0,tau1=n,taup=25)
         sigmax=np.array([[0,1],[1,0]],dtype=np.complex)
         sigmay=np.array([[0,-1j],[1j,0]],dtype=np.complex)
         sigmaz=np.array([[1,0],[0,-1]],dtype=np.complex)
-        return 0.5*((lp.lzx(k0=kx).timeFunc(t)+lp.pipulse(tau=tau).timeFunc(t))*sigmax+\
+        return 0.5*((lp.lzx(k0=kx).timeFunc(t))*sigmax+\
             lp.lzy(k1=ky).timeFunc(t)*sigmay+lp.lzz(k2=kz).timeFunc(t)*sigmaz)
+        # return 0.5*((lp.lzx(k0=kx).timeFunc(t)+lp.pipulse(A=A,tau=tau).timeFunc(t))*sigmax+\
+        #     lp.lzy(k1=ky).timeFunc(t)*sigmay+lp.lzz(k2=kz).timeFunc(t)*sigmaz)
 
     def lzfunc(self,theta,s):
         Plz = s
@@ -112,13 +116,19 @@ class method(object):
     def evolution_with_time(self,tau1=37.5,display=False,output=False,plot=False):
         T = np.arange(self.start,self.end,self.step)
         dt = T[1]-T[0]
-        psi0 = np.array([0,1+0j])
+        psi0 = np.array([1+0j,0])
         psit = psi0
         psiT = []
+        rhoT = []
         for t in T:
-            psit=psit-1j*np.dot(method().H(t,n=tau1),psit)*dt
+            psit = psit-1j*np.dot(method().H(t,n=tau1),psit)*dt
             psiT.append(psit)
+            vect = psit.reshape(2,1)
+            rhoT.append(np.dot(vect,np.transpose(vect).conj()))
+        rhoT = np.array(rhoT)
         psiT = np.array(psiT)
+        pyplt.plotTrajectory(rhoT,state=1,labels=True)
+        plt.show()
         P0 = psiT[:,0]*psiT[:,0].conj()
         P1 = psiT[:,1]*psiT[:,1].conj()
         data = [P0,P1]
@@ -137,17 +147,18 @@ class method(object):
         if output:
             return data
 
-    def evolution_with_theta(self,display=False,output=False,m=25,s0 = [0.5],plot=False,fitting=False):
+    def  evolution_with_theta(self,display=False,output=False, m=25, delta=10.0, s0 = [0.5],plot=False,fitting=True):
         T = np.arange(self.start,self.end,self.step)
-        Theta = np.arange(0,2*np.pi,0.2)
+        Theta = np.arange(0,2*np.pi,0.1)
         psi0 = np.array([0,1+0j])
         p1 = []
         Rhos0 = []
         q = sim.Qubit2(T1=10000,T2=10000)
         lp = lzpulse(tau0=0,tau1=37.5,taup=m)
         for th in Theta:
-            q.uw=lp.lzx(k0=2)+1j*lp.lzy(k1=2*np.tan(th))+lp.pipulse(tau=2)
-            q.df=lp.lzz(k2=4)
+            k0 = np.sqrt(delta**2/(1+np.tan(th)**2))
+            q.uw=lp.lzx(k0=k0)+1j*lp.lzy(k1=k0*np.tan(th))+lp.pipulse()
+            q.df=lp.lzz(k2=1.0)
             qsys=sim.QuantumSystem([q])
             rhos0=qsys.simulate(psi0,T,method='other')
             Rhos0.append(rhos0)
@@ -178,6 +189,32 @@ class method(object):
             print 'P1 =',data[1]
         if output:
             return data
+
+    def simuLZ(self, bloch=False, plot=False, m=25, output=False, kx=0.5, theta=np.pi/4, kz=0.1):
+        T0 = np.arange(self.start, self.end, self.step)
+        lp = lzpulse(tau0=0,tau1=37.5,taup=m)
+        psi0 = np.array([1+0j,0j])
+        q = sim.Qubit2(T1=10000, T2=10000)
+        q.uw = lp.lzx(k0=kx)+1j*lp.lzy(k1=kx*np.tan(theta))+lp.pipulse()
+        q.df = lp.lzz(k2=kz)
+        qsys = sim.QuantumSystem([q])
+        rhos0 = qsys.simulate(psi0, T0, method='other')
+        if bloch:
+             pyplt.plotTrajectory(rhos0, state=1, labels=True)
+             plt.show()
+        data = rhos0
+        P0 = rhos0[:, 0][:, 0]
+        P1 = rhos0[:, 1][:, 1]
+        if plot:
+            plt.xlabel('time[ns]')
+            plt.ylabel('population')
+            plt.plot(T0, P1, '-.', label='p1')
+            plt.legend(loc=1)
+            plt.ylim(0, 1)
+            plt.show()
+        if output:
+            print 'P0=',P0,'rho=',data
+        return data
 
     def evolution_with_taup(self,tp0=25,tp1=35,num=10,output=False,imshow=False):
         Taup = np.linspace(tp0,tp1,num)
@@ -227,18 +264,37 @@ class method(object):
 
     def print_PLZ(self):
         plsq = method().evolution_with_theta(output=True)
-        print 'Landau-Zener Transition Probability P-LZ is',plsq[2][0][0]
+        print 'Landau-Zener Transition Probability P-LZ is',plsq[3][0][0]
+
+def P1(Plz=0.6, theta=np.pi*1, plot=True):
+    Plzseq = np.linspace(0, Plz, 100)
+    thetaseq = np.linspace(0, theta, 100)
+    P1 = []
+    for theta in thetaseq:
+        P1seq = 1 - 4*Plz*(1-Plz)*np.sin(theta)**2
+        P1.append(P1seq)
+    P1 = np.array(P1)
+    if plot:
+        plt.plot(thetaseq, P1)
+        plt.show()
 
 if __name__ == '__main__':
-    method().evolution_with_theta(fitting=True)
-    Theta = np.arange(0,2*np.pi,0.2)
-    test_theta = np.pi/2
-    idth = int(len(Theta)/(2*np.pi/test_theta))
-    rho = method().evolution_with_theta(output=True)[1]
-    pi = rho[idth][:,0:2,0:2][0][1][1]*rho[idth][:,0:2,0:2][0][1][1].conj()
-    pf = rho[idth][:,0:2,0:2][-1][1][1]*rho[idth][:,0:2,0:2][-1][1][1].conj()
-    print pi,pf
-
-
-
-
+    lzpulse().plot_lz(k0=1,k1=0.8,k2=0.5)
+    method(start=0,end=150,step=0.01).simuLZ(bloch=True,plot=True,kx=0.28, theta=np.pi/4, kz=0.1)
+    T = np.arange(25, 125, 1)
+    eigvalg = []
+    eigvale = []
+    for t in T:
+        eigvalue, eigvector = np.linalg.eig(method().H(t))
+        eigvalg.append(np.real(eigvalue[0]))
+        eigvale.append(np.real(eigvalue[1]))
+    eigvalg = np.array(eigvalg)
+    eigvale = np.array(eigvale)
+    plt.plot(T, eigvalg,'.', T, eigvale, '.')
+    plt.plot(T, eigvalg, '.', T, eigvale, '.')
+    plt.xlim(0, 150)
+    plt.ylim(-0.25, 0.25)
+    plt.xlabel('Time')
+    plt.ylabel('Energy')
+    plt.grid()
+    plt.show()
