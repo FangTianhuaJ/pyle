@@ -1,26 +1,19 @@
 import numpy as np
 from numpy import pi
-from pyle.math import ket2rho, tensor, commutator, lindblad, dot3
 from matplotlib import pyplot as plt
-
 import pylesim.plotting as pyplt
 from scipy import optimize
 from pylesim import envelopes as env
 from pylesim.envelopes import Envelope
 from matplotlib.pyplot import figure
-
-import pyle.sim.quantsim as sim
-from pyle.sim.qctools import trace_distance, fidelity
-from pyle.sim import qctools as qct
-from pyle.sim.sequences import Trapezoid, Delay, Gaussian, Cos, Square,Gaussian_HD, GaussianNormalizedHD
-from pyle.sim import piPulse
-
+import pylesim.quantsim as sim
 
 q0 = sim.Qubit3(T1=50000, T2=40000, nonlin=-0.24)
 q1 = sim.Qubit3(T1=50000, T2=40000, nonlin=-0.2)
 rc = sim.Resonator(T1=3000, T2=10e3, n=2, df=0.3)
 
 S = 0.01
+
 c0 = sim.Coupler(q0,rc,s=S)
 c1 = sim.Coupler(q1,rc,s=S)
 c12 = sim.Coupler(q0,q1,s=S)
@@ -31,13 +24,11 @@ system = sim.QuantumSystem([q0,q1],[c12])
 
 
 class TwoqubitHeatEngine(object):
-
     def __init__(self, start=0, end=36, step=0.01):
-
         self.start = start
         self.end = end
-        self.step = step
-    
+        self.step = step    
+
     def f10A(self, t0=-1000, t1=1000, z=5.48315):
         def timeFunc(t):
             za = z*(t>t0)*(t<t1)
@@ -63,8 +54,32 @@ class TwoqubitHeatEngine(object):
             return za
         return Envelope(timeFunc, start=t0, end=t0+uplen)
 
+    def swap11and20(self, tuneA=np.arange(-0.2,0.2,0.001),delay=np.arange(0,200,0.01)):
+        psi0 = np.array([0,0,0,0,1+0j,0,0,0,0])
+        P_11,P_20 = [],[]
+        q1.df = TwoqubitHeatEngine().f10B()
+        for i in range(len(tuneA)):
+            tuneAi = tuneA[i]
+            q0.df = TwoqubitHeatEngine().f10A(z=5.48315+tuneAi)
+            rhos0 = system.simulate(psi0, delay, method='other')
+            P11 = rhos0[:, 4][:, 4]
+            P20 = rhos0[:, 6][:, 6]
+            P_11.append(P11)
+            P_20.append(P20)
+        P_11 = np.real(np.array(np.array(P_11)))
+        P_20 = np.array(P_20)
+        lx,ly = len(tuneA),len(delay)
+        delay_m,tuneA_m = np.meshgrid(delay,tuneA)
+        P11_m = P_11.reshape(lx,ly)
+        plt.pcolormesh(tuneA_m,delay_m,P11_m,cmap='RdYlBu_r')
+        plt.colorbar(label='P11')
+        plt.xlabel('tuneA[GHz]')
+        plt.ylabel('delay[ns]')
+        plt.show()
+        return len(P_11)
+
     def simisothermy(self, plot=False, output=False, bloch=True, trace=True, t0A=0, t0B=0, uplen=[5,5,5,5], keeplen=[5,5,3,3],\
-        zamp=[-0.2,-0.05,-0.05,-0.02,-0.02,-0.01,-0.01, 0.0], detune=[-0.46,-0.46,-0.4,-0.4]):
+        zamp=[-0.2,-0.05,-0.05,-0.02,-0.02,-0.01,-0.01, 0.0], detune=[-1.46,-1.46,-1.4,-1.4]):
         T0 = np.arange(self.start, self.end, self.step)
         psi0 = np.array([0,0,0,0,1+0j,0,0,0,0])
         # q0.uw = env.cosine(t0=10, w=20, amp=1.0/20, phase=0.0)
@@ -96,10 +111,11 @@ class TwoqubitHeatEngine(object):
         reduced_rho = []
 
         for i in range(len(T0)):
-            rhoi1 = np.array(rhos0[i])
-            reduced_rhoi = [[rhoi1[0,0]+rhoi1[1,1]+rhoi1[2,2],rhoi1[0,3]+rhoi1[1,4]+rhoi1[2,5],rhoi1[0,6]+rhoi1[1,7]+rhoi1[2,8]],\
-                            [rhoi1[3,0]+rhoi1[4,1]+rhoi1[5,2],rhoi1[3,3]+rhoi1[4,4]+rhoi1[5,5],rhoi1[3,6]+rhoi1[4,7]+rhoi1[5,8]],\
-                            [rhoi1[6,0]+rhoi1[7,1]+rhoi1[8,2],rhoi1[6,3]+rhoi1[7,4]+rhoi1[8,5],rhoi1[6,6]+rhoi1[7,7]+rhoi1[8,8]]]
+            rhoi = np.array(rhos0[i])
+            reduced_rhoi = [[rhoi[0,0]+rhoi[1,1]+rhoi[2,2],rhoi[0,3]+rhoi[1,4]+rhoi[2,5],rhoi[0,6]+rhoi[1,7]+rhoi[2,8]],\
+                            [rhoi[3,0]+rhoi[4,1]+rhoi[5,2],rhoi[3,3]+rhoi[4,4]+rhoi[5,5],rhoi[3,6]+rhoi[4,7]+rhoi[5,8]],\
+                            [rhoi[6,0]+rhoi[7,1]+rhoi[8,2],rhoi[6,3]+rhoi[7,4]+rhoi[8,5],rhoi[6,6]+rhoi[7,7]+rhoi[8,8]]]
+
             reduced_rho2i = np.dot(reduced_rhoi,reduced_rhoi)
             tr_reduced_rhoi = np.trace(reduced_rhoi)
             tr_reduced_rho2i = np.trace(reduced_rho2i)
@@ -139,7 +155,8 @@ class TwoqubitHeatEngine(object):
 
 
 if __name__ == '__main__':
-    TwoqubitHeatEngine().simisothermy(plot=False, output=False, bloch=True, trace=True)
+    TwoqubitHeatEngine().simisothermy(plot=True, output=False, bloch=False, trace=True)
+    TwoqubitHeatEngine().swap11and20()
     pulsez = TwoqubitHeatEngine().simisothermy(plot=False, output=True, bloch=False, trace=False)[1]
     pulsec = TwoqubitHeatEngine().simisothermy(plot=False, output=True, bloch=False, trace=False)[2]
     T = np.linspace(-20, 50, 1001)
