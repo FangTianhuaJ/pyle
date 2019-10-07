@@ -10,7 +10,7 @@ from pyle.analysis import readout
 from pyle.dataking import sweeps
 from pyle.dataking import util
 from pyle.dataking import zfuncs
-from pyle.dataking.fpgaseqTransmonV7 import runQubits
+# from pyle.dataking.fpgaseqTransmonV7 import runQubits
 from pyle.dataking.singleQubitTransmon import calculateZpaFunc
 from pyle.envelopes import NumericalPulse, Envelope
 from pyle.fitting import fitting
@@ -26,13 +26,43 @@ from pyle.plotting import dstools
 from pyle.plotting import tomography as tg
 from pyle import tomo
 from pyle.analysis.stateTomography import correctVisibility
-from pyle.pipeline import returnValue
 from pyle.pipeline import FutureList
 from pyle.math import ket2rho, fidelity
 from pyle.datavault import DataVaultWrapper
 from pyle.plotting.tomography import plotTrajectory
 from pyle.math import dot3
 from pyle.dataking import singleQubitTransmon as sq
+import sys
+#sys.path.append('D:\DatakingCodes\zzwpyle\ABC')
+import swiphttest as sw
+import lz
+from random import choice
+import pyle.optimize as popt
+
+
+qubit_config = ['q3', 'q4']
+
+FBC_ENABLE = False
+
+if FBC_ENABLE:
+    from pyle.dataking import feedback_controller as fbc
+    runQubits = fbc.runQubits
+    # you should run this command before using any sq.qfb functions
+    # sq.qfb.feedback_controller.get_wiring()
+else:
+    from pyle.dataking.fpgaSeqTransmonV10 import runQubits
+    # from pyle.dataking.fpgaseqTransmonV7 import runQubits
+    runQubits = runQubits
+    pass
+
+from pyle.dataking import qubitFeedback as qfb
+feedback_test = qfb.feedback_test
+fbc_1bit = qfb.fbc_1bit
+fbc_2bits = qfb.fbc_2bits
+
+
+
+
 # COLORS
 BLUE   = "#348ABD"
 RED    = "#E24A33"
@@ -59,7 +89,7 @@ basis1 = {'I': tomo.sigmaI, 'X': tomo.Xpi, 'Y': tomo.Ypi,
          'Z': tomo.Zpi, 'X/2': tomo.Xpi2, 'Y/2': tomo.Ypi2,
          'Z/2': tomo.Zpi2, '-X': tomo.Xmpi, '-Y': tomo.Ympi,
          '-Z': tomo.Zmpi, '-X/2': tomo.Xmpi2, '-Y/2': tomo.Ympi2,
-         '-Z/2': tomo.Zmpi2,'H':Uhardmard,'Z/4':tomo.Rmat(tomo.sigmaZ,np.pi/4)}
+         '-Z/2': tomo.Zmpi2,'H':Uhardmard,'Z/4':tomo.Rmat(tomo.sigmaZ,np.pi/4),'lz': tomo.Xpi,'swipht': tomo.Xpi}
 
 Gatelist={'SE': lambda q: gates.Echo([q], q['identityWaitLen']),
 'I': lambda q: gates.Wait([q], 0 * ns),
@@ -74,8 +104,9 @@ Gatelist={'SE': lambda q: gates.Echo([q], q['identityWaitLen']),
 'H': lambda q: gates.FastRFHadamard([q]),
 'D': lambda q: gates.Detune([q]),
 'Z': lambda q: gates.PiPulseZ([q]),
-'Z/2': lambda q: gates.PiHalfPulseZ([q])}
-
+'Z/2': lambda q: gates.PiHalfPulseZ([q]),
+'lz': lambda q: lz.LZ_gate([q]),
+'swipht': lambda q: sw.SwiphtGate([q])}
 
 def prestate(state='I', level=2):
     state0 = np.array([[1], [0]])
@@ -118,7 +149,7 @@ class testCzpulse(NumericalPulse):
     @convertUnits(t0='ns', T='ns', G='GHz')
     def __init__(self, q1, q2, t0=0.0 * ns, T=20.0 * ns, G=0.01 * 2 * np.sqrt(2) * MHz, thetaf=np.pi / 3,
                  N=20001,
-                 back=False):
+                 back=True):
         self.q1 = q1
         self.q2 = q2
         self.t0 = t0
@@ -208,8 +239,9 @@ class testCZ_gate(Gate):
             l = q1['testCzlen']
         else:
             l = self.length
+
         q1['z'] += testCzpulse(q1, q2, t0=t, T=self.length, G=self.G, thetaf=self.thetaf)
-        q1['_t'] += 2 * l + 2 * self.tbuf+30*ns
+        q1['_t'] += 2 * l + 2 * self.tbuf+10*ns
         q1['xy_phase'] += self.phase0
         q2['xy_phase'] += self.phase1
 
@@ -256,7 +288,7 @@ class SwapCZ(Gate):
         self.overshoot = overshoot
         self.overshoot_w = overshoot_w
         if tlen == None:
-            self.tlen = 2*agents[0]['Swapczlen']
+            self.tlen = agents[0]['Swapczlen']
         if amp == None:
             self.amp = agents[0]['Swapczamp']
         if phase0 == None:
@@ -272,7 +304,7 @@ class SwapCZ(Gate):
         tlen = self.tlen
         amp = self.amp
         if self.tlen == None:
-            l = 2*q0['Swapczlen']
+            l = q0['Swapczlen']
         else:
             l = self.tlen
         q0['z'] += env.rect(t, tlen, amp, overshoot=self.overshoot,overshoot_w=self.overshoot_w)
@@ -284,8 +316,8 @@ class SwapCZ(Gate):
         return "SwapCZ"
 
 
-def test_SwapCz_Pop(Sample, phase, measure=(0, 1), control=True, stats=1200, tBuf=5 * ns,
-                name='test SwapCz control', save=True, noisy=True):
+def test_Cz_Pop(Sample, phase, measure=(0, 1), control=True, stats=1200, tBuf=5 * ns,
+                name='test Cz Pop', save=True, noisy=True):
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
     axes = [(phase, 'phase compensate')]
@@ -304,16 +336,22 @@ def test_SwapCz_Pop(Sample, phase, measure=(0, 1), control=True, stats=1200, tBu
         if control:
             alg[gates.PiPulse([q1])]
         alg[gates.Wait([q0], 2 * q0['piLen'])]
-        #alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], phase0=currphase)]
-        alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'], phase0=currphase)]
+        alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], phase0=currphase)]
+        # alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'], phase0=currphase)]
         alg[gates.Wait([q0], tBuf)]
         alg[gates.PiHalfPulse([q0])]
         if control:
+            print 'the control step will be done'
             alg[gates.Sync([q0, q1])]
             alg[gates.PiPulse([q1])]
+            print 'the control step has be done'
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        print 'measure is ok'
+        alg.compile(correctXtalkZ=True, config=qubit_config)
+        print 'compile is ok'
+        print 'all the  gates are good'
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        print 'we got data'
         probs = np.squeeze(
             readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
         returnValue([probs[0], probs[1], probs[2], probs[3]])
@@ -321,11 +359,11 @@ def test_SwapCz_Pop(Sample, phase, measure=(0, 1), control=True, stats=1200, tBu
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
     return data
 
-def pop2(Sample, measure=(0,1), currlen=st.r[25:35:0.2, ns], curramp=st.r[-0.19:-0.18:0.0005], control=True, stats=300L, tBuf=5*ns, name='pop2', save=True, noisy=True):
+def pop2(Sample, measure=(0,1), currlen=st.r[20:100:1, ns],stats=300L, tBuf=5*ns, name='pop2', save=True, noisy=True):
 
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
-    axes = [(currlen, 'swaplength'),(curramp, 'Amp')]
+    axes = [(currlen, 'swaplen')]
     qNames = [dev.__name__ for dev in devs if dev.get("readout", False)]
 
     deps = [("|00>", '', ''), ("|01>", '', ''),("|02>", '', ''),
@@ -335,24 +373,25 @@ def pop2(Sample, measure=(0,1), currlen=st.r[25:35:0.2, ns], curramp=st.r[-0.19:
 
     dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
 
-    def func(server, currlen, curramp):
+    def func(server, currlen):
         alg = gc.Algorithm(devs)
         q0 = alg.q0
         q1 = alg.q1
         alg[gates.PiPulse([q0])]
-        if control:
-            alg[gates.PiPulse([q1])]
+        alg[gates.PiPulse([q1])]
         alg[gates.Wait([q0], tBuf)]
         # alg[testCZ_gate([q0, q1], length=currdelay, G=q0['Czstrength'],thetaf=currphase)]
-        alg[gates.Detune([q0], tlen=currlen*2, amp=curramp)]
+        # alg[gates.Detune([q0], tlen=currlen*2, amp=curramp)]
+        alg[SwapCZ([q0,q1], tlen=currlen, amp=-0.518)]
         alg[gates.Wait([q0], tBuf)]
+        alg[gates.Sync([q0, q1])]
         # alg[gates.PiPulse([q0])]
-        if control:
-            alg[gates.Sync([q0, q1])]
-            alg[gates.PiPulse([q1])]
+        # if control:
+        #     alg[gates.Sync([q0, q1])]
+        #     alg[gates.PiPulse([q1])]
         alg[gates.Wait([q0], tBuf)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=['q3', 'q2'])
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probs = np.squeeze(
             readout.iqToProbs(data, alg.qubits, states=[0, 1, 2], correlated=True)).flat
@@ -362,49 +401,6 @@ def pop2(Sample, measure=(0,1), currlen=st.r[25:35:0.2, ns], curramp=st.r[-0.19:
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
 
     return data
-
-def test_Cz_ramsey2(Sample, swaplen=st.r[26:35:0.2], delay=st.r[0:500:2,ns], measure=(0, 1), control=True, stats=1200, tBuf=0 * ns, name='test Cz phase_confirm_2', save=True, noisy=True, fringeFreq=10*MHz ):
-    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
-
-    axes = [(swaplen, 'swaplen [ns]'),(delay, 'delay [ns]')]
-
-    deps = [("|1> control off", '', ''),
-            ("|1> control on", '', '')]
-    kw = {"stats": stats, 'tBuf': tBuf, 'Control': control, 'fringeFreq':fringeFreq }
-
-    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
-
-    def func(server, currlen, currDelay):
-
-        P = []
-        for control in [False, True]:
-            alg = gc.Algorithm(devs)
-            q0 = alg.q0
-            q1 = alg.q1
-            alg[gates.PiHalfPulse([q0])]
-            if control:
-                alg[gates.PiPulse([q1])]
-            alg[gates.Sync([q0, q1])]
-            alg[gates.Wait([q0], tBuf)]
-            # alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
-            alg[gates.Detune([q0], tlen=currlen*2*ns, amp=0.001837*currlen-0.245935)]
-            alg[gates.Wait([q0], tBuf)]
-            alg[gates.Sync([q0, q1])]
-            currphase = float(fringeFreq*currDelay)*2*np.pi
-            alg[gates.Wait([q0], currDelay)]
-            alg[gates.PiHalfPulse([q0],phase=currphase)]
-            if control:
-                alg[gates.PiPulse([q1])]
-            alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
-            data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
-            probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
-            P.append(probs[1])
-        returnValue(P)
-
-    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
-    return data
-
 
 def test_Cz_controlphase(Sample, g, phase=np.linspace(0, 2 * np.pi, 100), measure=(0, 1), stats=1200,
                          tBuf=20 * ns,
@@ -440,7 +436,7 @@ def test_Cz_controlphase(Sample, g, phase=np.linspace(0, 2 * np.pi, 100), measur
             if control:
                 alg[gates.PiPulse([q0])]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[3])
@@ -485,7 +481,7 @@ def test_Cz_controlphase_confirm(Sample, phase=np.linspace(0, 2 * np.pi, 100), m
             if control:
                 alg[gates.PiPulse([q0])]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[3])
@@ -530,7 +526,7 @@ def test_Cz_controlbit_Ztal(Sample, delay=st.r[0:500:10,ns], measure=(0, 1), sta
         phae = 2*np.pi*fringefreq*currdelay
         alg[gates.PiHalfPulse([q1],phase=phae)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=qubit_config)
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
         P.append(probs[measure[0]*2+1])
@@ -572,7 +568,7 @@ def test_Cz_targetbit_Ztal(Sample, delay=np.linspace(0, 2 * np.pi, 100), measure
             alg[gates.Sync([q0, q1])]
             alg[gates.PiHalfPulse([q0],phase=np.pi/2)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[1])
@@ -614,7 +610,7 @@ def test_Cz_tunnphase_confirm(Sample, phase, g, measure=(0, 1), control=True, st
             if control:
                 alg[gates.PiPulse([q1])]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[1])
@@ -624,8 +620,9 @@ def test_Cz_tunnphase_confirm(Sample, phase, g, measure=(0, 1), control=True, st
     return data
 
 
-def test_Cz_ramsey(Sample, delay=st.r[0:500:2,ns], measure=(0, 1), control=True, stats=1200, tBuf=20 * ns,
-                     name='test Cz phase_confirm', save=True, noisy=True, fringeFreq=10*MHz ):
+
+def test_Cz_ramsey(Sample, measure=(0, 1), delay=st.r[0:500:10,ns],control=True, stats=1200, tBuf=0*ns,
+                     name='test Cz ramsey', save=True, noisy=True, fringeFreq=10*MHz ):
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
     axes = [(delay, 'delay [ns]')]
@@ -647,61 +644,18 @@ def test_Cz_ramsey(Sample, delay=st.r[0:500:2,ns], measure=(0, 1), control=True,
             if control:
                 alg[gates.PiPulse([q1])]
             alg[gates.Sync([q0, q1])]
-            alg[gates.Wait([q0], tBuf)]
-            alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
-            alg[gates.Wait([q0], tBuf)]
+            #alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
+            alg[SwapCZ([q0,q1])]
             alg[gates.Sync([q0, q1])]
+            if control:
+                alg[gates.PiPulse([q1])]
+            alg[gates.Sync([q0, q1])]
+            alg[gates.Wait([q0], tBuf)]
             currphase = float(fringeFreq*currDelay)*2*np.pi
             alg[gates.Wait([q0], currDelay)]
             alg[gates.PiHalfPulse([q0],phase=currphase)]
-            if control:
-                alg[gates.PiPulse([q1])]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
-            data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
-            probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
-            P.append(probs[1])
-        returnValue(P)
-
-    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
-    return data
-
-def test_Cz_ramsey1(Sample, delay=st.r[0:500:2,ns], measure=(0, 1), control=True, stats=1200, tBuf=20 * ns,
-                     name='test Cz phase_confirm_1', save=True, noisy=True, fringeFreq=10*MHz ):
-    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
-
-    axes = [(delay, 'delay [ns]')]
-
-    deps = [("|1> control off", '', ''),
-            ("|1> control on", '', '')]
-    kw = {"stats": stats, 'tBuf': tBuf, 'Control': control, 'fringeFreq':fringeFreq }
-
-    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
-
-    def func(server, currDelay):
-
-        P = []
-        for control in [False, True]:
-            alg = gc.Algorithm(devs)
-            q0 = alg.q0
-            q1 = alg.q1
-            alg[gates.PiHalfPulse([q0])]
-            if control:
-                alg[gates.PiPulse([q1])]
-            alg[gates.Sync([q0, q1])]
-            alg[gates.Wait([q0], tBuf)]
-            # alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
-            #alg[gates.Detune([q0], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'])]
-            alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'])]
-            alg[gates.Wait([q0], tBuf)]
-            alg[gates.Sync([q0, q1])]
-            currphase = float(fringeFreq*currDelay)*2*np.pi
-            alg[gates.Wait([q0], currDelay)]
-            alg[gates.PiHalfPulse([q0],phase=currphase)]
-            if control:
-                alg[gates.PiPulse([q1])]
-            alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[1])
@@ -711,51 +665,16 @@ def test_Cz_ramsey1(Sample, delay=st.r[0:500:2,ns], measure=(0, 1), control=True
     return data
 
 
-def test_ramsey_q12(Sample, delay=st.r[0:500:5,ns], measure=(0, 1), stats=1200, tBuf=10 * ns,
-                     name='test_ramsey_q1_q2', save=True, noisy=True, fringeFreq=10*MHz ):
-    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
-
-    axes = [(delay, 'delay [ns]')]
-
-    deps = [("|00>", '', ''), ("|01>", '', ''),
-            ("|10>", '', ''), ("|11>", '', '')]
-    kw = {"stats": stats, 'tBuf': tBuf, 'fringeFreq':fringeFreq }
-
-    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
-
-    def func(server, currDelay):
-        alg = gc.Algorithm(devs)
-        q0 = alg.q0
-        q1 = alg.q1
-        alg[gates.PiHalfPulse([q0])]
-        alg[gates.PiHalfPulse([q1])]
-        alg[gates.Wait([q0], tBuf)]
-        alg[gates.Sync([q0, q1])]
-        currphase = float(fringeFreq*currDelay)*2*np.pi
-        alg[gates.Wait([q0], currDelay)]
-        alg[gates.Wait([q1], currDelay)]
-        alg[gates.PiHalfPulse([q0],phase=currphase)]
-        alg[gates.PiHalfPulse([q1],phase=currphase)]
-        alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=False, config=['q3', 'q4'])
-        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
-        probs = np.squeeze(
-            readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
-        returnValue([probs[0], probs[1], probs[2], probs[3]])
-
-    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
-    return data
-
-
-def swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:1:0.1], stats=300L, prob_correlated=False, tBuf=5*ns, overshoot=0.0, name='swap 11 and 20', save=True, noisy=True):
+def swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:1:0.1], stats=300L, prob_correlated=True, correctXtalkZ=True, tBuf=5*ns, overshoot=0.0, name='swap 11 and 20', save=True, noisy=True):
 
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
     axes = [(swapAmp, 'swap amplitude'), (delay, 'swap time'), (overshoot, 'overshoot')]
     qNames = [dev.__name__ for dev in devs if dev.get("readout", False)]
 
-    deps = [("|00>", '', ''), ("|01>", '', ''),
-            ("|10>", '', ''), ("|11>", '', '')]
+    # deps = [("|00>", '', ''), ("|01>", '', ''),
+    #         ("|10>", '', ''), ("|11>", '', '')]
+    deps = readout.genProbDeps(qubits, measure, states=[0, 1], correlated=prob_correlated)
     kw = {"stats": stats, 'tBuf': tBuf, 'prob_correlated': prob_correlated}
 
     dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
@@ -770,15 +689,193 @@ def swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:
         alg[gates.Detune([q0], currDelay, currAmp, currOs)]
         alg[gates.Wait([q0], tBuf)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=False, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
-        probs = np.squeeze(
-            readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=prob_correlated)).flat
+        returnValue([probs[0], probs[1], probs[2],  probs[3]])
+
+    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    return data
+
+
+
+def testOneQubit(Sample, measure=0, delay=st.r[0:100:2, ns], stats=1200,
+                  name='test one qubit', save=True, correctXtalkZ=True, noisy=True):
+
+    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
+
+    axes = [(delay, 'Delay')]
+    # deps = [("|00>", '', ''), ("|01>", '', ''),
+    #         ("|10>", '', ''), ("|11>", '', '')]
+    deps = readout.genProbDeps(qubits, measure, states=[0, 1], correlated=False)
+    kw = {"name": name}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    def func(server, currDelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        alg[gates.PiPulse([q0])]
+        alg[gates.Sync([q0])]
+        alg[gates.Wait([q0], currDelay)]
+        alg[gates.Measure([q0])]
+        alg.compile()
+        data = yield runQubits(server, alg.agents, stats)
+        print np.array(data).shape
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flat
+        returnValue([probs[0], probs[1]])
+
+    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    return data
+
+
+def testTwoQubit(Sample, measure=(0,1), delay=st.r[0:100:2, ns], stats=1200, tBuf=10*ns,
+                  name='test two qubit', save=True, correctXtalkZ=True, correlated=False, noisy=True):
+
+    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
+
+    axes = [(delay, 'Delay')]
+    # deps = [("|00>", '', ''), ("|01>", '', ''),
+    #         ("|10>", '', ''), ("|11>", '', '')]
+    deps = readout.genProbDeps(qubits, measure, states=[0, 1], correlated=correlated)
+    kw = {"name": name}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    def func(server, currDelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        q1 = alg.q1
+        #alg[gates.PiPulse([q0])]
+        alg[gates.PiPulse([q1])]
+        #alg[gates.Sync([q0, q1])]
+        alg[gates.Wait([q0], currDelay)]
+        alg[gates.PiHalfPulse([q0])] # X/2
+        alg[gates.Wait([q0], 100*ns)]
+        alg[gates.PiHalfPulse([q0], phase=np.pi/2)]
+        alg[gates.Wait([q0], tBuf)]
+        #alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
+        alg[gates.Sync([q0, q1])]
+        #alg[gates.Wait([q0], currDelay)]
+        alg[gates.Measure([q0,q1])]
+        alg.compile(correctXtalkZ=correctXtalkZ)
+        data = yield runQubits(server, alg.agents, stats)
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=correlated)).flat
         returnValue([probs[0], probs[1], probs[2], probs[3]])
 
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
 
     return data
+
+
+
+def sq_iqToProbs(Sample, measure=0, data=None, x_axis='delay', plot=True):
+    sample, devs, qubits = gc.loadQubits(Sample, measure)
+    alg = gc.Algorithm(devs)
+    dvw = DataVaultWrapper(Sample)
+    stats = data.parameters['stats']
+
+    if x_axis in data.parameters:
+        datax = data.parameters[x_axis]
+    else:
+        raise IndexError('parameter {} does not found'.format(x_axis))
+
+    P0,P1 = [],[]
+    for i in range(1,len(datax)+1):
+        dd = np.column_stack((data[:,2*i-1],data[:,2*i]))
+        gg = dd.reshape(1,stats,1,2)
+        probs = np.squeeze(readout.iqToProbs(gg, alg.qubits, states=[0, 1], correlated=True)).flat
+        p0, p1= probs[0], probs[1]
+        P0.append(p0)
+        P1.append(p1)
+    if plot:
+        fig = plt.figure()
+        ax = fig.add_subplot(1,1,1)
+        ax.set_xlabel(x_axis)
+        ax.set_ylabel('P1')
+        ax.plot(datax,P1,'o-')
+        ax.grid()
+
+    plt.show()
+
+
+def testIQramsey(Sample, measure=0, state=1, fringeFreq=50*MHz, name='test IQ ramsey', stats=6000, delay=np.arange(0,100,20), save=True, noisy=True):
+    cxn = Sample._cxn
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
+    q = qubits[measure]
+    axes = [(range(stats), "Clicks")]
+    deps = [[("I", "|q%s>|time=%s>" %(measure,currDelay), ""), ("Q", "|q%s>|time=%s>" %(measure,currDelay), "")] for currDelay in delay]
+    deps = sum(deps, [])
+    IQLists = []
+
+    kw = {"stats": stats, 'state': state, 'delay': delay}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    with pyle.QubitSequencer() as server:
+        for currDelay in delay:
+            alg = gc.Algorithm(devs)
+            q0 = alg.q0
+            print currDelay
+            alg[gates.PiHalfPulse([q0], state=state)]
+            alg[gates.Wait([q0], currDelay*ns)]
+            phase = float(fringeFreq*currDelay*ns)*2*np.pi
+            alg[gates.PiHalfPulse([q0], phase=phase, state=state)]
+            alg[gates.Measure([q0])]
+            alg.compile()
+            data = runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+            IQLists.append(np.squeeze(data))
+    all_data = [np.array(range(stats)).reshape(-1, 1)]
+    for data in IQLists:
+        all_data.append(np.squeeze(data))
+    all_data = np.hstack(all_data)
+    all_data = np.array(all_data, dtype='float')
+
+    if save:
+        with dataset:
+            dataset.add(all_data)
+    return all_data
+
+
+def testIQtwoQubit(Sample, measure=(0,1), name='test IQ twoQubit', stats=6000, delay=[0*ns], save=True, noisy=True):
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
+    axes = [(range(stats), "Clicks")]
+    deps = [[("I", "|q%s>|%s>" %(m,currDelay), ""), ("Q", "|q%s>|%s>" %(m,currDelay), "")] \
+     for currDelay in delay for m in measure]
+    deps = sum(deps, [])
+    IQLists = []
+
+    kw = {"stats": stats, 'delay': delay}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure, kw=kw)
+
+    with pyle.QubitSequencer() as server:
+        for currDelay in delay:
+            alg = gc.Algorithm(devs)
+            q0 = alg.q0
+            q1 = alg.q1
+            print 'time = ', currDelay['ns']
+            alg[gates.PiPulse([q0])]
+            #alg[gates.PiPulse([q1])]
+            alg[gates.Sync([q0,q1])]
+            alg[gates.Wait([q0], currDelay)]
+            alg[gates.Measure([q0, q1])]
+            alg.compile()
+            data = runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+            IQLists.append(np.squeeze(data))
+    all_data = [np.array(range(stats)).reshape(-1, 1)]
+
+    for data in IQLists:
+        for q_idx in range(len(measure)):
+            [all_data.append(np.squeeze(data[q_idx]))]
+
+    all_data = np.hstack(all_data)
+    all_data = np.array(all_data, dtype='float')
+
+    if save:
+        with dataset:
+            dataset.add(all_data)
+
+    return all_data
+
 
 
 def Swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:1:0.1], stats=300L, prob_correlated=False, tBuf=5*ns, name='Swap 11 and 20', save=True, noisy=True):
@@ -805,7 +902,7 @@ def Swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:
         alg[gates.Detune([q0], currDelay, currAmp)]
         alg[gates.Wait([q0], tBuf)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=False, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=qubit_config)
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probs = np.squeeze(
             readout.iqToProbs(data, alg.qubits, states=[0, 1, 2], correlated=True)).flat
@@ -817,11 +914,11 @@ def Swap11and20(Sample, measure=(0,1), delay=st.r[0:200:2, ns], swapAmp=st.r[-1:
     return data
 
 
-def test_Cz_tunnCoup(Sample, phase, g, measure=(0, 1), control=True, stats=1200, tBuf=20 * ns,
-                     name='test Cz control', save=True, noisy=True, repeatNum=5, amp=0.02):
+def test_Cz_tunnCoup(Sample, phase, g, measure=(0, 1), control=True, stats=1200, tBuf=20 * ns, compare=True,
+    Vmin=0.8, Vmax=1.2, name='test Cz tunnCoup', save=True, noisy=True, repeatNum=3):
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
-    axes = [(phase, 'phase compensate'), (g, 'coupling')]
+    axes = [(g, 'coupling'),(phase, 'phase compensate')]
 
     deps = [("|1> control off", '', ''),
             ("|1> control on", '', '')]
@@ -829,7 +926,7 @@ def test_Cz_tunnCoup(Sample, phase, g, measure=(0, 1), control=True, stats=1200,
 
     dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
 
-    def func(server, currphase, currg):
+    def func(server, currg, currphase):
 
         P = []
         for control in [False, True]:
@@ -843,28 +940,48 @@ def test_Cz_tunnCoup(Sample, phase, g, measure=(0, 1), control=True, stats=1200,
             alg[gates.Wait([q0], tBuf)]
             for i in range(repeatNum):
                 alg[gates.Wait([q0], tBuf)]
-                alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=currg, phase0=currphase, thetaf=None, amp=amp)]
+                alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=currg, phase0=currphase, thetaf=None)]
             alg[gates.Wait([q0], tBuf)]
             alg[gates.Sync([q0, q1])]
             alg[gates.PiHalfPulse([q0],phase=0.0)]
             if control:
                 alg[gates.PiPulse([q1])]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[1])
         returnValue(P)
 
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    if compare:
+        x, y = data[:,0], data[:,1],
+        z, m = data[:,2], data[:,3]
+        X,Y = [],[]
+        for (i,j) in zip(x,y):
+            if not i in X:
+                X.append(i)
+            if not j in Y:
+                Y.append(j)
+        X, Y = np.array(X), np.array(Y)
+        Z, M = np.array(z), np.array(m)
+        lx, ly = len(X), len(Y)
+        Z, M = Z.reshape(lx,ly), M.reshape(lx,ly)
+        idx = np.argsort(X)
+        Y, X = np.meshgrid(Y, X[idx])
+        plt.pcolormesh(X, Y, Z[idx]+M[idx],cmap='RdYlBu')
+        plt.colorbar(label='Prob')
+        plt.clim(Vmin,Vmax)
+        plt.show()
+
     return data
 
 
-def test_Cz_tunntheta(Sample, phase, measure=(0, 1), control=True, stats=1200, tBuf=20 * ns,
-                     name='test Cz control', save=True, noisy=True, repeatNum=5, amp=0.02):
+def test_Cz_tunntheta(Sample, measure=(0, 1), phase=st.r[0:2*np.pi:0.5], thetaf=st.r[2.0:2.5:0.05], control=True, stats=1200, tBuf=20 * ns, compare=True, Vmin=0.8, Vmax=1.2, name='test Cz tunning thetaf', save=True, noisy=True, repeatNum=3):
     sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
 
-    axes = [(phase, 'phase compensate')]
+    axes = [(thetaf,'thetaf'), (phase, 'phase compensate')]
 
     deps = [("|1> control off", '', ''),
             ("|1> control on", '', '')]
@@ -872,7 +989,7 @@ def test_Cz_tunntheta(Sample, phase, measure=(0, 1), control=True, stats=1200, t
 
     dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
 
-    def func(server, currphase):
+    def func(server, currtheta, currphase):
 
         P = []
         for control in [False, True]:
@@ -886,21 +1003,44 @@ def test_Cz_tunntheta(Sample, phase, measure=(0, 1), control=True, stats=1200, t
             alg[gates.Wait([q0], tBuf)]
             for i in range(repeatNum):
                 alg[gates.Wait([q0], tBuf)]
-                # alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], thetaf=currtheta, amp=amp, phase0=currphase)]
-                alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'], phase0=currphase)]
+                alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], thetaf=currtheta, phase0=currphase)]
+                #alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'], phase0=currphase)]
+            alg[gates.Sync([q0, q1])]
+            if control:
+                alg[gates.PiPulse([q1])]
             alg[gates.Wait([q0], tBuf)]
             alg[gates.Sync([q0, q1])]
             alg[gates.PiHalfPulse([q0],phase=0)]
-            if control:
-                alg[gates.PiPulse([q1])]
+            alg[gates.Wait([q0], tBuf)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flatten()
             P.append(probs[1])
         returnValue(P)
 
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    if compare:
+        x, y = data[:,0], data[:,1],
+        z, m = data[:,2], data[:,3]
+        X,Y = [],[]
+        for (i,j) in zip(x,y):
+            if not i in X:
+                X.append(i)
+            if not j in Y:
+                Y.append(j)
+        X, Y = np.array(X), np.array(Y)
+        Z, M = np.array(z), np.array(m)
+        lx, ly = len(X), len(Y)
+        Z, M = Z.reshape(lx,ly), M.reshape(lx,ly)
+        idx = np.argsort(X)
+        Y, X = np.meshgrid(Y, X[idx])
+        plt.pcolormesh(X, Y, Z[idx]+M[idx],cmap='RdYlBu')
+        plt.colorbar(label='Prob')
+        plt.clim(Vmin,Vmax)
+        plt.show()
+
     return data
 
 
@@ -942,6 +1082,7 @@ def test_Cz_tunnlength(Sample, phase, length, measure=(0, 1), control=True, stat
         returnValue(P)
 
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
     if plot:
         dataoff = data[:, (0, 1, 2)]
         dataon = data[119][:, (0, 1, 3)]
@@ -963,6 +1104,26 @@ def test_Cz_tunnlength(Sample, phase, length, measure=(0, 1), control=True, stat
         plt.figure()
         plt.plot(g, deltaphase)
     return data
+
+def plot2D(data=None, Vmin=0.8, Vmax=1.2):
+    x, y = data[:,0], data[:,1],
+    z, m = data[:,2], data[:,3]
+    X,Y = [],[]
+    for (i,j) in zip(x,y):
+        if not i in X:
+            X.append(i)
+        if not j in Y:
+            Y.append(j)
+    X, Y = np.array(X), np.array(Y)
+    Z, M = np.array(z), np.array(m)
+    lx, ly = len(X), len(Y)
+    Z, M = Z.reshape(lx,ly), M.reshape(lx,ly)
+    idx = np.argsort(X)
+    Y, X = np.meshgrid(Y, X[idx])
+    plt.pcolormesh(X, Y, Z[idx]+M[idx],cmap='RdYlBu')
+    plt.colorbar(label='Prob')
+    plt.clim(Vmin,Vmax)
+    plt.show()
 
 
 def sq_gate_QPT(Sample, measure=0, stats=600, name='sq_gate_QPT',
@@ -1022,8 +1183,8 @@ def sq_gate_QPT(Sample, measure=0, stats=600, name='sq_gate_QPT',
     return chi
 
 
-def testCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=True, noisy=True, plot=False,
-               correct=True, tBuf=20 * ns):
+def testCz_QPT(Sample, measure=(0, 1), swaplen=37.0*ns, swapamp=-0.35, thetaf=None, stats=1200, name='test Cz QPT', save=True, noisy=True, plot=False,
+    correct=True, tBuf=20*ns):
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
     q0 = qubits[0]
     q1 = qubits[1]
@@ -1031,7 +1192,7 @@ def testCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=
     i = np.arange(len(qptPrepOps))
     axes = [(i, "the initial state")]
     qstOps = list(tomo.gen_qst_tomo_ops(tomo.octomo_names, 2))
-    kw = {'stats': stats}
+    kw = {'stats': stats, 'swaplen':swaplen, 'swapamp':swapamp}
     deps = [('Probability', opLabel(ops) + ',' + stateLabel(state), '') for ops in qstOps for state
             in range(4)]
     dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
@@ -1045,13 +1206,13 @@ def testCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=
             alg[gates.Tomography([q0, q1], qptPrepOps[n])]
             alg[gates.Sync([q0, q1])]
             alg[gates.Wait([q0], tBuf)]
-            alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], phase0=q0['testCzphase'],
-                            phase1=q1['testCzphase'])]
+            #alg[testCZ_gate([q0, q1], length=q0['testCzlen'], thetaf=thetaf, G=q0['Czstrength'])]
+            alg[SwapCZ([q0,q1], tlen=swaplen, amp=swapamp)]
             alg[gates.Wait([q0], tBuf)]
             alg[gates.Sync([q0, q1])]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1110,12 +1271,12 @@ def SwapCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=
             # alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], phase0=q0['testCzphase'],
             #                 phase1=q1['testCzphase'])]
             #alg[gates.Detune([q0], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'])]
-            alg[SwapCZ([q0,q1], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'])]
+            alg[SwapCZ([q0,q1], tlen=q0['Swapczlen'], amp=q0['Swapczamp'])]
             alg[gates.Wait([q0], tBuf)]
             alg[gates.Sync([q0, q1])]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=['q6', 'q5'])
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1208,7 +1369,7 @@ def testCz_repeat(Sample, measure=(0, 1), repeat=20, init=('I', 'I'), stats=1200
                         phase1=q1['testCzphase'])]
         alg[gates.Wait([q0], tBuf)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=qubit_config)
         reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1262,7 +1423,7 @@ def testCz_repeat_QST(Sample, measure=(0, 1), repeat=20, init=('I', 'I'), stats=
             alg[gates.Sync([q0, q1])]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1346,7 +1507,7 @@ def testCNOT_QPT(Sample, measure=(0, 1), stats=1200, name='test CNOT', save=True
             alg[gates.PiHalfPulse([q0], phase=np.pi / 2)]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1410,7 +1571,7 @@ def testCNOT_repeat_QST(Sample, measure=(0, 1), repeat=20, init=('I', 'I'), stat
             alg[gates.PiHalfPulse([q0], phase=np.pi / 2)]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1492,6 +1653,47 @@ class testSwapCZ_RBCliffordMultiQubit(Gate):
         self.subgates = subgates
 
 
+class RBCliffordSingleQubit(Gate):
+    def __init__(self, agents, gateList, alpha=None):
+        """
+        build RB gate sequence for single qubit, convert a list of gate string to the gate
+        @param gateList: a list of string of gate
+        @param alpha: alpha of DRAG
+        """
+        self.gateList = gateList
+        self.gateOps = {
+            'I': lambda q: gates.Wait([q], q.get('identityLen', q['piLen'])),
+            'IW': lambda q: gates.Wait([q], q['identityWaitLen']),
+            'IWSE': lambda q: gates.EchoWait([q], q['identityWaitLen']),
+            'SE': lambda q: gates.Echo([q], q['identityWaitLen']),
+            'IGN': lambda q: gates.Wait([q], 0 * ns),
+            'X': lambda q: sw.SwiphtGate([q]),
+            #'X': lambda q: gates.PiPulse([q], alpha=alpha),
+            'Y': lambda q: gates.PiPulse([q], alpha=alpha, phase=np.pi/2.),
+            'X/2': lambda q: gates.PiHalfPulse([q], alpha=alpha),
+            'Y/2': lambda q: gates.PiHalfPulse([q], alpha=alpha, phase=np.pi/2.),
+            '-X': lambda q: gates.PiPulse([q], alpha=alpha, phase=np.pi),
+            '-Y': lambda q: gates.PiPulse([q], alpha=alpha, phase=3*np.pi/2.),
+            '-X/2': lambda q: gates.PiHalfPulse([q], alpha=alpha, phase=np.pi),
+            '-Y/2': lambda q: gates.PiHalfPulse([q], alpha=alpha, phase=3*np.pi/2.),
+            'H': lambda q: gates.FastRFHadamard([q]),
+            'Z': lambda q: gates.Detune([q]),
+            'Zpi': lambda q: gates.PiPulseZ([q]),
+            'Zpi/2': lambda q: gates.PiHalfPulseZ([q]),
+        }
+        super(RBCliffordSingleQubit, self).__init__(agents)
+
+    def setSubgates(self, agents):
+        ag = agents[0]
+        subgates = []
+        for gate in self.gateList:
+            for sq_op in gate[0]:
+                subgates.append(self.gateOps[sq_op](ag))
+        self.subgates = subgates
+
+    def updateAgents(self):
+        pass
+
 def randomizedBenchmarking(Sample, measure=0, ms=None, k=30, interleaved=False, maxtime=14*us,
                            name='SQ RB Clifford', stats=900, plot=True, save=True, noisy=False):
     """
@@ -1533,7 +1735,7 @@ def randomizedBenchmarking(Sample, measure=0, ms=None, k=30, interleaved=False, 
         gate_list = getSequence(currM)
         alg = gc.Algorithm(devs)
         q0 = alg.q0
-        alg[gates.RBCliffordSingleQubit([q0], gate_list)]
+        alg[RBCliffordSingleQubit([q0], gate_list)]
         alg[gates.Measure([q0])]
         alg.compile()
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
@@ -1547,21 +1749,12 @@ def randomizedBenchmarking(Sample, measure=0, ms=None, k=30, interleaved=False, 
 
     return data
 
-def testSwapCZ_randomizedBenchmarking(Sample, measure=(0,1), ms=None, k=30, interleaved=False, maxtime=14*us,
-                           name='testSwapCZ RB Clifford', stats=900, plot=True, save=True, noisy=False):
-    """
-    single Qubit RB Clifford,
-    ms is a sequence for the number of gates,
-    k is the repetition of each number of gates
-    interleaved is the gate name, in the format ["X"], or ["X", "Y/2"]
-    available gate names are
-        ["I", "X", "Y", "X/2", "Y/2", "-X/2", "-Y/2", "-X", "-Y"]
-
-    """
+def testCZ_randomizedBenchmarking(Sample, measure=(0,1), m_max=50, m_points=30 ,k=30, interleaved=False, maxtime=14*us,
+                           name='testCZ RB Clifford', stats=900, plot=True, save=True, noisy=False):
 
     sample, devs, qubits = gc.loadQubits(Sample, measure)
     rbClass = rb.RBClifford(2, False)
-
+    ms = np.unique([int(m) for m in np.logspace(0, np.log10(m_max), m_points, endpoint=True)])
     def getSequence(m):
         sequence = rbClass.randGen(m, interleaved=interleaved, finish=True)
         return sequence
@@ -1587,7 +1780,7 @@ def testSwapCZ_randomizedBenchmarking(Sample, measure=(0,1), ms=None, k=30, inte
         q1 = alg.q1
         alg[testSwapCZ_RBCliffordMultiQubit([q0,q1], gate_list)]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=qubit_config)
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probs = np.squeeze(
             readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
@@ -1595,9 +1788,267 @@ def testSwapCZ_randomizedBenchmarking(Sample, measure=(0,1), ms=None, k=30, inte
 
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
     if plot:
-        sq.plotRBClifford(data)
+        ans = sq.plotRBClifford(data)
+        probs_fit = ans['p']
 
     return data
+
+
+
+def optimize_zpulse_gate(Sample, measure=(0,1), factor=[0.1,0.1,0.1,0.1], test_num=10, corrrection=True, error=0.1, m_max=20, m_points=3, k=20, interleaved=False, maxtime=14*us, name='optimize zpulse gate', stats=600, plot=True, save=False, noisy=False):
+
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
+    rbClass = rb.RBClifford(2, False)
+    ms = np.unique([int(m) for m in np.logspace(0, np.log10(m_max), m_points, endpoint=True)])
+    def getSequence(m):
+        sequence = rbClass.randGen(m, interleaved=interleaved, finish=True)
+        return sequence
+
+    axesname = 'm - number of Cliffords'
+    if interleaved:
+        name += ' interleaved: ' + str(interleaved)
+        axesname = "m - number of set of Clifford+interleaved"
+
+    axes = [(ms, axesname), (range(k), 'sequence')]
+    deps = [("Sequence Fidelity", "", "")]
+
+    kw = {"stats": stats, "interleaved": interleaved, 'k': k, 'axismode': 'm', "maxtime": maxtime}
+
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    def func(server, currM, currK):
+        print("m = {m}, k = {k}".format(m=currM, k=currK))
+        gate_list = getSequence(currM)
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        q1 = alg.q1
+        alg[testSwapCZ_RBCliffordMultiQubit([q0,q1], gate_list)]
+        alg[gates.Measure([q0, q1])]
+        alg.compile(correctXtalkZ=True, config=qubit_config)
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
+        returnValue([probs[0]])
+    data = sweeps.grid(func, axes, dataset=dataset, save=False, noisy=noisy)
+    probality_init = np.mean(data[:,2][:k])
+
+    if probality_init < 0.5:
+        print 'probality_init =', probality_init
+        raise Exception("init parameter is too bad")
+    ms, ks, probs = dstools.format2D(data)
+    prob_mean = np.mean(probs, axis=0)
+    prob_std = np.std(probs, axis=0)
+    p0 = [0.99, np.max(prob_mean)-np.min(prob_mean), np.min(prob_mean)]
+    ans = rb.fitData(ms, prob_mean, A=None, B=None, p0=p0)
+    probs_fit = ans['p']
+    count = 0
+    probs_all, data_all = [probs_fit], [data]
+    print '{}, probs_init is {}'.format('init data is finished', probs_fit)
+
+    Q = Qubits[measure[0]]
+    sign_guess = [1,1] if len(Q['settlingRates']) == 1 else [1,1,1,1]
+    settlingRates, settlingAmplitudes = [devs[measure[0]]['settlingRates']],[devs[measure[0]]['settlingAmplitudes']]
+
+    if corrrection:
+        if len(Q['settlingRates']) == 1:
+            Rates0, Amplitudes0 = Q['settlingRates'][0], Q['settlingAmplitudes'][0]
+        if len(Q['settlingRates']) == 2:
+            Rates0, Amplitudes0 = Q['settlingRates'][0], Q['settlingAmplitudes'][0]
+            Rates1, Amplitudes1 = Q['settlingRates'][1], Q['settlingAmplitudes'][1]
+        sign_all, new_sign = [sign_guess],[]
+
+        for loop_i in range(test_num):
+            count += 1
+            print('\033[1;35;1m count = {} \033[0m').format(count)
+            if loop_i == 0:
+                if len(Q['settlingRates']) == 1:
+                    Rates0 += Rates0*factor[0]*sign_guess[0]
+                    Amplitudes0 += Amplitudes0*factor[1]*sign_guess[1]
+                    devs[measure[0]]['settlingRates'] = [Rates0]
+                    devs[measure[0]]['settlingAmplitudes'] = [Amplitudes0]
+                if len(Q['settlingRates']) == 2:
+                    Rates0 += Rates0*factor[0]*sign_guess[0]
+                    Rates1 += Rates0*factor[1]*sign_guess[1]
+                    Amplitudes0 += Amplitudes0*factor[2]*sign_guess[2]
+                    Amplitudes1 += Amplitudes1*factor[3]*sign_guess[3]
+                    devs[measure[0]]['settlingRates'] = [Rates0, Rates1]
+                    devs[measure[0]]['settlingAmplitudes'] = [Amplitudes0, Amplitudes1]
+
+            if loop_i != 0:
+                if len(Q['settlingRates']) == 1:
+                    devs[measure[0]]['settlingRates'] = [Rates0]
+                    devs[measure[0]]['settlingAmplitudes'] = [Amplitudes0]
+                if len(Q['settlingRates']) == 2:
+                    devs[measure[0]]['settlingRates'] = [Rates0, Rates1]
+                    devs[measure[0]]['settlingAmplitudes'] = [Amplitudes0, Amplitudes1]
+            print 'settlingRates = {}'.format(devs[measure[0]]['settlingRates'])
+            print 'settlingAmplitudes = {}'.format(devs[measure[0]]['settlingAmplitudes'])
+
+            def func(server, currM, currK):
+                print("m = {m}, k = {k}".format(m=currM, k=currK))
+                gate_list = getSequence(currM)
+                alg = gc.Algorithm(devs)
+                q0 = alg.q0
+                q1 = alg.q1
+                alg[testSwapCZ_RBCliffordMultiQubit([q0,q1], gate_list)]
+                alg[gates.Measure([q0, q1])]
+                alg.compile(correctXtalkZ=True, config=qubit_config)
+                datai = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+                probs = np.squeeze(readout.iqToProbs(datai, alg.qubits, states=[0, 1], correlated=True)).flat
+                returnValue([probs[0]])
+            datai = sweeps.grid(func, axes, dataset=dataset, save=False, noisy=noisy)
+
+            msi, ksi, probsi = dstools.format2D(datai)
+            prob_meani, prob_stdi = np.mean(probsi, axis=0), np.std(probsi, axis=0)
+            p0i = [0.99, np.max(prob_meani)-np.min(prob_meani), np.min(prob_meani)]
+            ansi = rb.fitData(msi, prob_meani, A=None, B=None, p0=p0i)
+            probs_fit_i, probs_fit_pre = ansi['p'], probs_fit
+            delta_probsa, delta_probsb = probs_fit_i-probs_fit_pre, probs_fit_i-probs_fit
+            signa, signb = np.sign(delta_probsa), np.sign(probs_fit_i-probs_fit)
+            delta_grad = delta_probsa/delta_probsb
+
+            probs_fit_pre = probs_fit_i
+            settlingRates.append(devs[measure[0]]['settlingRates'])
+            settlingAmplitudes.append(devs[measure[0]]['settlingAmplitudes'])
+            probs_all.append(probs_fit_i)
+            index = np.argsort(-np.array(probs_all))
+            data_all.append(datai)
+            data_final = data_all[probs_all.index(max(probs_all))]
+            settlingRates_final = settlingRates[probs_all.index(max(probs_all))]
+            settlingAmplitudes_final = settlingAmplitudes[probs_all.index(max(probs_all))]
+            print 'probs_max = {}, probs_min = {}'.format(max(probs_all),min(probs_all))
+            print 'probs_all =', probs_all
+
+            if probs_fit_i > 1-error:
+                print 'error value is within the set range'
+                break
+            if loop_i < 0: # no actual meaning just adapt synatx rules
+                sign_guess_new = sign_guess
+
+            while probs_fit_i < 1-error:
+                if signa > 0 and signb >0:
+                    if len(Q['settlingRates']) == 1:
+                        if loop_i == 0:
+                            select_number = sign_guess
+                        else:
+                            select_number = sign_guess_new
+                        Rates0 += Rates0*factor[0]*delta_grad*sign_guess[0]*select_number[0]
+                        Amplitudes0 += Amplitudes0*factor[1]*delta_grad*sign_guess[1]*select_number[1]
+                    if len(Q['settlingRates']) == 2:
+                        if loop_i == 0:
+                            select_number = sign_guess
+                        else:
+                            select_number = sign_guess_new
+                        Rates0 += Rates0*factor[0]*delta_grad*sign_guess[0]*select_number[0]
+                        Rates1 += Rates0*factor[1]*delta_grad*sign_guess[1]*select_number[1]
+                        Amplitudes0 += Amplitudes0*factor[2]*delta_grad*sign_guess[2]*select_number[2]
+                        Amplitudes1 += Amplitudes1*factor[3]*delta_grad*sign_guess[3]*select_number[3]
+                    print 'sign_guess is ok'
+                    print 'probs_fit_'+str(loop_i+1)+' =', probs_fit_i
+                elif signa < 0 and signb >0:
+                    if len(Q['settlingRates']) == 1:
+                        select_number = choice([[1,-1],[-1,1]])
+                        Rates0 += Rates0*factor[0]*delta_grad*sign_guess[0]*select_number[0]
+                        Amplitudes0 += Amplitudes0*factor[1]*delta_grad*sign_guess[1]*select_number[1]
+                    if len(Q['settlingRates']) == 2:
+                        select_number = [choice([1,-1]),choice([1,-1]),choice([1,-1]),choice([1,-1])]
+                        Rates0 += Rates0*factor[0]*delta_grad*sign_guess[0]*select_number[0]
+                        Rates1 += Rates0*factor[1]*delta_grad*sign_guess[1]*select_number[0]
+                        Amplitudes0 += Amplitudes0*factor[2]*delta_grad*sign_guess[2]*select_number[0]
+                        Amplitudes1 += Amplitudes1*factor[3]*delta_grad*sign_guess[3]*select_number[0]
+                    print 'probs_fit_'+str(loop_i+1)+' =', probs_fit_i
+                else:
+                    select_number = [0,0] if len(Q['settlingRates']) == 1 else [0,0,0,0]
+                    if len(Q['settlingRates']) == 1:
+                        Rates0 = settlingRates_final[0]
+                        Amplitudes0 = settlingAmplitudes_final[0]
+                    if len(Q['settlingRates']) == 2:
+                        Rates0 = settlingRates_final[0]
+                        Rates1 = settlingRates_final[1]
+                        Amplitudes0 = settlingAmplitudes_final[0]
+                        Amplitudes1 = settlingAmplitudes_final[1]
+                    print 'probs_fit_'+str(loop_i+1)+' =', probs_fit_i
+                sign_all.append(select_number)
+                print 'settling amp and rates are reset'
+
+                for j in index:
+                    new_sign.append(sign_all[j])
+                sign_guess_new = new_sign[0]
+                print 'sign_guess_new'+str(loop_i+1)+' =', sign_guess_new
+
+                break
+    else:
+        data_final = data
+        settlingRates_final = settlingRates[0]
+        settlingAmplitudes_final = settlingAmplitudes[0]
+
+    zpulse_result = zip(['Rates','Amplitudes'],[settlingRates_final,settlingAmplitudes_final])
+    print zpulse_result
+
+    if plot:
+        sq.plotRBClifford(data_final)
+        if corrrection:
+            fig = plt.figure()
+            ax = fig.add_subplot(1,1,1)
+            ax.plot(range(count+1),probs_all,'o')
+            ax.set_xlabel('count')
+            ax.set_ylabel('probs')
+            plt.show()
+
+    if save:
+        with dataset:
+            dataset.add(data_final)
+
+    return data_final
+
+
+# zzx's algotithm requires that the key in the registry should be a number, instead of a list
+def orbitCzNM(Sample, measure=(0, 1), paramNames=['settlingAmplitudes'], interleaved=False, m=30, k=10,
+               nonzdelt=0.2, zdelt=0.2, xtol=0.001, ftol=0.001, maxiter=None, maxfun=None,
+               name='Cz Opt NM', stats=1500, noisy=True):
+    sample, devs, qubits = gc.loadQubits(Sample, measure)
+
+    params = popt.Parameters(devs, measure, qubitAndParamNames=[[devs[0].__name__, 'settlingAmplitudes']], paramNames=paramNames)
+    axes, deps, inputs = params.makeInputsAxesDeps(nelderMead=True)
+
+    kw = {"m": m, "stats": stats, "interleaved": interleaved, "axismode": "m", "k": k,
+          "paramNames": paramNames, 'nonzdelt': nonzdelt, 'zdelt': zdelt, "xtol": xtol,
+          "ftol": ftol, 'maxiter': maxiter, 'maxfun': maxfun}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    if interleaved:
+        name += " interleaved %s" % str(interleaved)
+
+    rbClass = rb.RBClifford(2)
+
+    def getSequence(m):
+        sequence = rbClass.randGen(m, interleaved=interleaved, finish=True)
+        return sequence
+
+    def func(server, args):
+        currParam = params.args2Params(args)
+        alg = gc.Algorithm(devs)
+        q0 = alg.qubits[0]
+        q1 = alg.qubits[1]
+        params.updateQubits(alg.agents, currParam, noisy=noisy)
+        gate_list = getSequence(m)
+        alg[testSwapCZ_RBCliffordMultiQubit([q0,q1], gate_list)]
+        alg[gates.Measure([q0, q1])]
+        alg.compile(correctXtalkZ=True, config=qubit_config)
+        data = yield runQubits(server, alg.agents, stats)
+        prob = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1]))
+        err = 1 - prob[0]
+        returnValue([err])
+
+    funcWrapper = popt.makeFunctionWrapper(k, func, axes, deps, measure, sample, noisy=noisy)
+    output = sweeps.fmin(funcWrapper, inputs, dataset, xtol=xtol, ftol=ftol, nonzdelt=nonzdelt,
+                         zdelt=zdelt, maxiter=maxiter, maxfun=maxfun)
+
+    return output
+
+
+
+
+
 
 
 def test_Cz_Zdelay(Sample, delay, measure=(0, 1), control=False, stats=1200, tBuf=5 * ns,
@@ -1635,7 +2086,7 @@ def test_Cz_Zdelay(Sample, delay, measure=(0, 1), control=False, stats=1200, tBu
             alg[gates.Sync([q0, q1])]
             alg[gates.PiPulse([q1])]
         alg[gates.Measure([q0, q1])]
-        alg.compile(correctXtalkZ=True, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=True, config=qubit_config)
         data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probs = np.squeeze(
             readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=False)).flat
@@ -1645,9 +2096,9 @@ def test_Cz_Zdelay(Sample, delay, measure=(0, 1), control=False, stats=1200, tBu
     return data
 
 
-def zPulseTailDecay(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, height=-1.0, zpulseLen=0.5*us,
+def zPulseTailDecay(Sample, measure=(0,1), waitTime=510*ns, step=10*ns, delayPoints=51, height=-1.0, zpulseLen=0.5*us,
                     tOffset=0*ns, measDelay=0*ns, doRelative=True, stats=1200, name='Z Tail Decay',
-                    reset=True, fixYTime=False, save=True,repeatNum=1, correctXtalkZ=True, control=True):
+                    reset=True, fixYTime=False, save=True, repeatNum=1, correctXtalkZ=True, control=True):
     """
     waitTime should be 3x or longer than suspected ringdown time.
     after a step, wait delay, then X/2 and wait for a time, finally Y/2.
@@ -1656,7 +2107,8 @@ def zPulseTailDecay(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, heig
     only update settlingRates
     """
 
-    delay = np.linspace(0, waitTime['ns'], delayPoints)*ns
+    #delay = np.linspace(10, waitTime['ns'], delayPoints)*ns
+    delay = np.arange(0, waitTime['ns'], step['ns'])*ns
 
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure=measure, write_access=True)
 
@@ -1698,10 +2150,10 @@ def zPulseTailDecay(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, heig
         alg[gates.PiHalfPulse([q0], phase=np.pi/2)] # Y/2
         alg[gates.Wait([q0], measDelay)]
         alg[gates.Measure([q0,q1])]
-        alg.compile(correctXtalkZ=correctXtalkZ, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
         dataZ = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probZ = np.squeeze(readout.iqToProbs(dataZ, alg.qubits, states=[0, 1], correlated=False)).flatten()
-        probZ = probZ[measure[0]*2+1]
+        #probZ = probZ[measure[0]*2+2]
 
         if doRelative:
             # no z pulse
@@ -1719,10 +2171,10 @@ def zPulseTailDecay(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, heig
             alg[gates.PiHalfPulse([q0], phase=np.pi/2)]  # Y/2
             alg[gates.Wait([q0], measDelay)]
             alg[gates.Measure([q0,q1])]
-            alg.compile(correctXtalkZ=correctXtalkZ, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
             dataNoop = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probNoop = np.squeeze(readout.iqToProbs(dataNoop, alg.qubits, states=[0, 1], correlated=False)).flatten()
-            probNoop = probNoop[measure[0]*2+1]
+            probNoop = probNoop[measure[0]*2+2]
             dat = np.hstack([probNoop, probZ, (probZ-probNoop)])
             returnValue(dat)
         else:
@@ -1731,6 +2183,232 @@ def zPulseTailDecay(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, heig
     data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=True)
 
     return data
+
+
+def testCZtailing(Sample, measure=(0,1), delay=st.r[0:800:20, ns], toffset=100*ns, control=True, measDelay=10*ns, stats=1200, tBuf=10*ns, zpulseLen=2*us, height=0.5, correction=True, correctXtalkZ=True, prob_correlated=False, name='test CZ tailing', save=True, noisy=True):
+    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
+    axes = [(delay, 'delay')]
+    #deps = readout.genProbDeps(qubits, measure, correlated=prob_correlated)
+    deps = [("Probality |0> of target", '', ''), ("Probality |1> of target", '', '')]
+
+    if correction:
+        name += ' corrected'
+    else:
+        name += ' uncorrected'
+
+    kw = {'stats': stats, 'measure delay': measDelay, 'tBuf': tBuf, 'time offset': toffset, "z pulse correction": correction}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    def func(server, currDelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        q1 = alg.q1
+        currDelay -= q0['piLen']/2.0
+        if not correction:
+            print 'zpulse without correction'
+            q0['settlingAmplitudes'] = []
+            q0['settlingRates'] = []
+        if control:
+            alg[gates.PiPulse([q1])]
+            alg[gates.Sync([q0, q1])]
+            alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'])]
+            alg[gates.Sync([q0, q1])]
+            alg[gates.PiPulse([q1])]
+            alg[gates.Sync([q0, q1])]
+        if not control:
+            alg[gates.Detune([q0], zpulseLen, amp=height)]
+        alg[gates.Wait([q0], waitTime=tBuf)]
+        alg[gates.Wait([q0], currDelay)]
+        alg[gates.PiHalfPulse([q0])] # X/2
+        alg[gates.Wait([q0], toffset)]
+        alg[gates.PiHalfPulse([q0], phase=np.pi/2)] # Y/2
+        alg[gates.Wait([q0], measDelay)]
+        alg[gates.Sync([q0, q1])]
+        alg[gates.Measure([q0, q1])]
+        alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=prob_correlated)).flat
+        returnValue([probs[2*measure[0]], probs[2*measure[0]+1]])
+
+    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    return data
+
+
+
+
+def zPulseTailing(Sample, measure=0, delay=st.r[0:500:5, ns], toffset=0*ns, height=-1.0,
+                  zpulseLen=2*us, repeat=1, measDelay=10*ns, stats=1200, zBuf=0*ns,
+                  correction=True, name='z pulse tailing',
+                  doRelative=False, save=True, noisy=True):
+    sample, devs, qubits = gc.loadQubits(Sample, measure=measure)
+
+    axes = [(delay, 'delay')]
+    if doRelative:
+        deps = [("Probability", "no op", ""), ("Probability", "z pulse", ""), ("Relative Probaiblity", "", "")]
+    else:
+        deps = readout.genProbDeps(qubits, measure)
+    if correction:
+        name += ' corrected'
+    else:
+        name += ' uncorrected'
+
+    kw = {'stats': stats, 'step height': height, 'step length': zpulseLen, 'measure delay': measDelay, 'zBuf': zBuf,
+          'time offset': toffset, "z pulse correction": correction, 'doRelative': doRelative, 'repeat': repeat}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    def func(server, currDelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        currDelay -= q0['piLen']/2.0
+        if not correction:
+            q0['settlingAmplitudes'] = []
+            q0['settlingRates'] = []
+        for i in range(repeat-1):
+            alg[gates.Detune([q0], zpulseLen, amp=height)]
+            alg[gates.Wait([q0], currDelay)]
+        alg[gates.Detune([q0], zpulseLen, amp=height)]
+        alg[gates.Wait([q0], waitTime=zBuf)]
+        if repeat == 1:
+            alg[gates.Wait([q0], currDelay)]
+        alg[gates.PiHalfPulse([q0])] # X/2
+        alg[gates.Wait([q0], toffset)]
+        alg[gates.PiHalfPulse([q0], phase=np.pi/2)] # Y/2
+        alg[gates.Wait([q0], measDelay)]
+        alg[gates.Measure([q0])]
+        alg.compile()
+        dat = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = np.squeeze(readout.iqToProbs(dat, alg.qubits))
+
+        if doRelative:
+            alg = gc.Algorithm(devs)
+            q0 = alg.q0
+            currDelay -= q0['piLen']/2.0
+            if not correction:
+                q0['settlingAmplitudes'] = []
+                q0['settlingRates'] = []
+            for i in range(repeat-1):
+                alg[gates.Detune([q0], zpulseLen, amp=0.0)]
+                alg[gates.Wait([q0], currDelay)]
+            alg[gates.Detune([q0], zpulseLen, amp=0.0)]
+            alg[gates.Wait([q0], zBuf)]
+            if repeat == 1:
+                alg[gates.Wait([q0], currDelay)]
+            alg[gates.PiHalfPulse([q0])] # X/2
+            alg[gates.Wait([q0], toffset)]
+            alg[gates.PiHalfPulse([q0], phase=np.pi/2)] # Y/2
+            alg[gates.Wait([q0], measDelay)]
+            alg[gates.Measure([q0])]
+            alg.compile()
+            dat_ref = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+            probs_ref = np.squeeze(readout.iqToProbs(dat_ref, alg.qubits))
+
+        if doRelative:
+            returnValue([probs_ref[1], probs[1], probs[1]-probs_ref[1]])
+        else:
+            returnValue(probs)
+
+    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    return data
+
+
+def anaZPulseDecay(dataset, order=2, guess=None, plot=True, Sample=None, update=False):
+    """
+    analyser for zPulseTailDecay
+    """
+    param = dataset.parameters
+    meas = param['measure'][0]
+    reset = param['reset']
+    relative = param['doRelative']
+    idx = 2 if relative else 1
+
+    def fitFunc(t, *p):
+        p = np.array(p)
+        n = int(len(p)//2)
+        val = p[0]
+        for i in range(n):
+            a = p[2*i+1]
+            r = p[2*i+2]
+            val = val + a*np.exp(-t*r)
+        return val
+
+    x = dataset[:, 0]
+    y = dataset[:, idx]
+    amp = 0.5
+    offset = y[-1]
+    if not guess:
+        if order == 1:
+            guess = [offset, amp, 1./100]
+        elif order == 2:
+            guess = [offset, 0, 1./30, amp, 1./300]
+        elif order == 3:
+            guess = [offset, 0.0, 0.1, 0, 0.01, amp, 0.001]
+        else:
+            guess = np.zeros(2*order+1)
+            guess[0] = offset
+            guess[1::2] = np.zeros(order)
+            guess[2::2] = np.linspace(0.001, 0.3, order, endpoint=False)
+
+    p, cov = curve_fit(fitFunc, x, y, p0=guess)
+
+    if plot:
+        plt.figure()
+        plt.plot(x, y, 'o', label='meas')
+        xp = np.linspace(np.min(x), np.max(x), 10*len(x))
+        plt.plot(xp, fitFunc(xp, *p), label='fit')
+        plt.xlabel("Delay")
+        plt.ylabel("Prob")
+
+    if update:
+        Qubits = gc.loadQubits(Sample, measure=meas, write_access=True)[-1]
+        if reset:
+            rates = p[2::2]
+            amps = p[1::2]
+            Qubits[meas]['settlingRates'] = rates
+            Qubits[meas]['settlingAmplitudes'] = amps
+        else:
+            oldRates = Qubits[meas]['settlingRates']
+            oldAmps = Qubits[meas]['settlingAmplitudes']
+            Qubits[meas]['settlingRates'] = np.hstack([oldRates, p[2::2]])
+            Qubits[meas]['settlingAmplitudes'] = np.hstack([oldAmps, np.zeros(order)])
+
+    print("Settling Parameters: ")
+    for i in range(order):
+        print("\t No. %s parameter: " %(i))
+        print("\t Decay amp %.4g" %(p[2*i+1]))
+        print("\t Decay time %.4g" %(1.0/p[2*i+2]))
+
+    return p, fitFunc
+
+def test_piHalfpulse(Sample, measure=(0,1), name='piHalfpulse', delay=st.r[0:100:10,ns], stats=1200, save=True, noisy=True):
+
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure=measure, write_access=True)
+    axes = [(delay, 'delay')]
+    deps = [("|00>", '', ''), ("|01>", '', ''),
+            ("|10>", '', ''), ("|11>", '', '')]
+    kw = {'stats': stats}
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    def func(server, currDelay):
+        alg = gc.Algorithm(devs)
+        q0 = alg.qubits[0]
+        q1 = alg.qubits[1]
+        alg[gates.Wait([q0], currDelay)]
+        alg[gates.PiHalfPulse([q0])]
+        alg[gates.PiHalfPulse([q0], phase=np.pi/2)]  # Y/2
+        alg[gates.Measure([q0,q1])]
+        alg.compile(correctXtalkZ=True, config=qubit_config)
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = np.squeeze(
+            readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
+        returnValue([probs[0], probs[1], probs[2],  probs[3]])
+
+    data = sweeps.grid(func, axes, dataset=dataset, save=save, noisy=noisy)
+
+    return data
+
+
 
 
 
@@ -1787,7 +2465,7 @@ def zPulseTailDecay2(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, hei
         alg[gates.PiHalfPulse([q0], phase=np.pi/2)] # Y/2
         alg[gates.Wait([q0], measDelay)]
         alg[gates.Measure([q0,q1])]
-        alg.compile(correctXtalkZ=correctXtalkZ, config=['q3', 'q4'])
+        alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
         dataZ = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
         probZ = np.squeeze(readout.iqToProbs(dataZ, alg.qubits, states=[0, 1], correlated=False)).flatten()
         probZ = probZ[measure[0]*2+1]
@@ -1808,7 +2486,7 @@ def zPulseTailDecay2(Sample, measure=(0,1), waitTime=500*ns, delayPoints=51, hei
             alg[gates.PiHalfPulse([q0], phase=np.pi/2)]  # Y/2
             alg[gates.Wait([q0], measDelay)]
             alg[gates.Measure([q0,q1])]
-            alg.compile(correctXtalkZ=correctXtalkZ, config=['q3', 'q4'])
+            alg.compile(correctXtalkZ=correctXtalkZ, config=qubit_config)
             dataNoop = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
             probNoop = np.squeeze(readout.iqToProbs(dataNoop, alg.qubits, states=[0, 1], correlated=False)).flatten()
             probNoop = probNoop[measure[0]*2+1]
@@ -2254,18 +2932,22 @@ def calculateReadoutCenters(Sample, measure=0, states=[0, 1], readoutFrequency=N
     return fids, centers, stds
 
 if __name__ == '__main__':
-    q1 = {'calZpaFunc': [0.16575096, 6.13776594, 1.16224172, 0.24676], 'f10': 5.53834 * GHz, 'Targetfreq':5.33584*GHz}
-    q2 = {'calZpaFunc': [0.27626002, 6.15827732, 1.93108506, 0.25], 'f10': 5.08888 * GHz, 'f21': 4.84 * GHz}
-    pulse = testCzpulse(q1, q2, t0=0.0 * ns, T=10.0 * ns, G=14 * MHz, thetaf=2.794, N=40001,
+    q1 = {'calZpaFunc': [0.19754733, 5.53596589, -0.04448539, 0.22503], 'f10': 5.53503 * GHz, 'Targetfreq':5.44*GHz}
+    q2 = {'calZpaFunc': [0.21334726, 4.82947734, -0.24870336, 0.1145], 'f10': 5.23466 * GHz, 'f21': 5.02 * GHz}
+    pulse = testCzpulse(q1, q2, t0=0.0*ns, T=20.0 * ns, G=26.65* MHz, thetaf=2.33, N=40001,
                         back=True)
+    # print('\033[1;35;1m {} \033[0m').format('updated_keys : ')
     # func = zfuncs.AmpToFrequency(q1)
     # print func(0.00)
     # func = zfuncs.FrequencyToAmp(q1)
     # print func(5.52176581155)
     # print pulse(60)
     # env.test_env(pulse)
-    T = np.linspace(-200, 500, 4001)
+    T = np.linspace(-100, 200, 4001)
     plt.figure()
+    plt.grid()
     plt.plot(T, pulse(T))
     #np.savetxt('tesCZdata.txt',np.vstack((T,pulse(T))).T)
     plt.show()
+
+
