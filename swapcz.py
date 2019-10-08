@@ -1,5 +1,8 @@
 import numpy as np
 import pyle
+import copy
+import time
+import labrad
 from labrad.units import Unit
 from matplotlib import mlab
 from matplotlib import pyplot as plt
@@ -35,10 +38,10 @@ from pyle.dataking import singleQubitTransmon as sq
 import sys
 #sys.path.append('D:\DatakingCodes\zzwpyle\ABC')
 import swiphttest as sw
+from pyle.workflow import switchSession
 import lz
 from random import choice
 import pyle.optimize as popt
-
 
 qubit_config = ['q3', 'q4']
 
@@ -308,7 +311,7 @@ class SwapCZ(Gate):
         else:
             l = self.tlen
         q0['z'] += env.rect(t, tlen, amp, overshoot=self.overshoot,overshoot_w=self.overshoot_w)
-        q0['_t'] += l+10*ns
+        q0['_t'] += l+30*ns
         q0['xy_phase'] += self.phase0
         q1['xy_phase'] += self.phase1
 
@@ -1597,7 +1600,7 @@ def testCNOT_repeat_QST(Sample, measure=(0, 1), repeat=20, init=('I', 'I'), stat
 from pyle.dataking.benchmarking import randomizedBechmarking as rb
 
 class testSwapCZ_RBCliffordMultiQubit(Gate):
-    def __init__(self, agents, gateList, sync=True):
+    def __init__(self, agents, gateList, sync=True, Swapczlen=None, Swapczamp=None):
         """
         build gate from gateList for multiQubit.
         @param agents: qubits
@@ -1625,8 +1628,8 @@ class testSwapCZ_RBCliffordMultiQubit(Gate):
             'Z': lambda q: gates.Detune([q]),
             'Zpi': lambda q: gates.PiPulseZ([q]),
             'Zpi/2': lambda q: gates.PiHalfPulseZ([q]),
-            #"CZ": lambda q1, q2: testCZ_gate([q1, q2]),
-            "CZ": lambda q1, q2: SwapCZ([q1, q2]),
+            # "CZ": lambda q1, q2: testCZ_gate([q1, q2]),
+            "CZ": lambda q1, q2: SwapCZ([q1, q2],tlen=Swapczlen, amp=Swapczamp),
             "CNOT": lambda q1, q2: gates.CNOT([q1, q2])
         }
         super(testSwapCZ_RBCliffordMultiQubit, self).__init__(agents)
@@ -1793,9 +1796,172 @@ def testCZ_randomizedBenchmarking(Sample, measure=(0,1), m_max=50, m_points=30 ,
 
     return data
 
+def f_target(CZparameter, Sample, measure=(0,1), single_m=10, k=30, interleaved=False, maxtime=14*us,
+    name='f_target', stats=900, plot=True, save=False, update=False, noisy=True):
+
+    Swapczamp = CZparameter[0]
+    settlingAmplitudes = CZparameter[1]
+    settlingRates = CZparameter[2]
+
+    sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
+    Q = Qubits[measure[0]]
+    rbClass = rb.RBClifford(2, False)
+    def getSequence(m):
+        sequence = rbClass.randGen(m, interleaved=interleaved, finish=True)
+        return sequence
+
+    axesname = 'm - number of Cliffords'
+
+    if interleaved:
+        name += ' interleaved: ' + str(interleaved)
+        axesname = "m - number of set of Clifford+interleaved"
+
+    axes = [(range(k), 'average number k with m='+str(single_m))]
+    deps = [("Sequence Fidelity", "", "")]
+
+    kw = {"stats": stats, "interleaved": interleaved, 'k': k, 'axismode': 'm', "maxtime": maxtime}
+
+    dataset = sweeps.prepDataset(sample, name, axes, deps, measure=measure, kw=kw)
+
+    devs[measure[0]]['settlingAmplitudes'] = [settlingAmplitudes]
+    devs[measure[0]]['settlingRates'] = [settlingRates]
+
+    print '------------------------------'
+    print 'Swapczamp is:', Swapczamp
+    print 'settlingAmplitudes is {} and settlingRates is'.format(settlingAmplitudes,settlingRates)
+
+    def func(server, currK):
+        print("k = {k}".format(k=currK))
+        gate_list = getSequence(single_m)
+        alg = gc.Algorithm(devs)
+        q0 = alg.q0
+        q1 = alg.q1
+        alg[testSwapCZ_RBCliffordMultiQubit([q0,q1], gate_list, Swapczlen=None, Swapczamp=Swapczamp)]
+        alg[gates.Measure([q0, q1])]
+        alg.compile(correctXtalkZ=True, config=qubit_config)
+        data = yield runQubits(server, alg.agents, stats, dataFormat='iqRaw')
+        probs = np.squeeze(readout.iqToProbs(data, alg.qubits, states=[0, 1], correlated=True)).flat
+        returnValue([probs[0]])
+    data = sweeps.grid(func, axes, dataset=dataset, save=False, noisy=noisy)
+    probality_now = np.mean(data[:,1])
+    print 'probality_now with m='+str(single_m)+' is', probality_now
+    print '------------------------------'
+
+    if probality_now < 0.0:
+        print 'probality_now =', probality_now
+        raise Exception("init parameter is too bad")
+
+    if save:
+        with dataset:
+            dataset.add(data)
+    if update:
+        try:
+            Q["Swapczamp"] = round(Swapczamp,4)
+        except RuntimeError:
+            print('\033[1;35;1m {} \033[0m').format('Swapczamp update failed')
+        try:
+            Q["settlingRates"] = [round(settlingRates,5)]
+        except RuntimeError:
+            print('\033[1;35;1m {} \033[0m').format('settlingRates update failed')
+        try:
+            Q["settlingAmplitudes"] = [round(settlingAmplitudes,4)]
+        except RuntimeError:
+            print('\033[1;35;1m {} \033[0m').format('settlingAmplitudes update failed')
+
+    return 1-probality_now
+
+def nelder_mead_cz(Sample, measure=(0,1), single_m=10, k=30, name='test nelder-mead CZ', interleaved=False, save=True, update=False,
+    x_start=np.array([-0.36,-0.11,0.042]), step=[0.1,0.1,0.05], error=0.01, max_attempts=20, max_iter=0, alpha=1.0, gamma=2.0, rho=0.5, sigma=0.5):
+    # init
+    dim = len(x_start)
+    prev_best = f_target(CZparameter=x_start, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
+    attempts_num = 0
+    response = [[x_start, prev_best]]
+
+    for i in range(dim):
+        x = copy.copy(x_start)
+        x[i] = x[i] + step[i]
+        score = f_target(CZparameter=x, Sample=Sample, measure=measure, single_m=single_m,
+            k=k, interleaved=interleaved)
+        response.append([x, score])
+    # simplex iter
+    iters = 0
+    while 1:
+        # order
+        response.sort(key=lambda x: x[1])
+        best = response[0][1]
+        # break after max_iter
+        if max_iter and iters >= max_iter:
+            print 'maximum number of iterations has been reached'
+            return response[0]
+        iters += 1
+        # break after max_attempts iterations with no improvement
+        time.sleep(0.1)
+        print('\033[1;35;1m best probs_fit value of cz so far: {} \033[0m').format(1-best)
+        print('\033[1;35;1m best cz parameters so far: {} \033[0m').format(response[0][0])
+
+        if prev_best - best > error:
+            attempts_num = 0
+            prev_best = best
+        else:
+            attempts_num += 1
+        if attempts_num >= max_attempts:
+            print 'number of iterations:',iters
+            print 'current optimal solution within max_attempts is {}'.format(1-response[0][1])
+            print 'the final cz parameters is',response[0][0]
+            if save or update:
+                f_target(CZparameter=response[0][0], Sample=Sample, measure=measure, single_m=single_m, k=k,
+                    interleaved=interleaved, name=name, save=save, update=update)
+            return response[0]
+
+        # centroid
+        x0 = [0.0] * dim
+        for tup in response[:-1]:
+            for i, c in enumerate(tup[0]):
+                x0[i] += c / (len(response)-1)
+        # reflection
+        xr = x0 + alpha*(x0 - response[-1][0])
+        rscore = f_target(CZparameter=xr, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
+        if response[0][1] <= rscore < response[-2][1]:
+            print 'reflection is running ...'
+            del response[-1]
+            response.append([xr, rscore])
+            continue
+        # expansion
+        if rscore < response[0][1]:
+            print 'expansion is running ...'
+            xe = x0 + gamma*(xr - x0)
+            escore = f_target(CZparameter=xe, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
+            if escore < rscore:
+                del response[-1]
+                response.append([xe, escore])
+                continue
+            else:
+                del response[-1]
+                response.append([xr, rscore])
+                continue
+        # contraction
+        if rscore >= response[-2][1]:
+            print 'contraction is running ...'
+            xc = x0 + rho*(response[-1][0]-x0)
+            cscore = f_target(CZparameter=xc, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
+            if cscore < response[-1][1]:
+                del response[-1]
+                response.append([xc, cscore])
+                continue
+        # shrink
+        print 'shrink is running ...'
+        x1 = response[0][0]
+        nresponse = [[x1, response[0][1]]]
+        for tup in response[1:]:
+            xi = x1 + sigma*(tup[0] - x1)
+            score = f_target(CZparameter=xi, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
+            nresponse.append([xi, score])
+        response = nresponse
 
 
-def optimize_zpulse_gate(Sample, measure=(0,1), factor=[0.1,0.1,0.1,0.1], test_num=10, corrrection=True, error=0.1, m_max=20, m_points=3, k=20, interleaved=False, maxtime=14*us, name='optimize zpulse gate', stats=600, plot=True, save=False, noisy=False):
+
+def optimize_zpulse_gate(Sample, measure=(0,1), factor=[0.1,0.1,0.1,0.1], test_num=10, corrrection=True, error=0.1, m_max=20, m_points=3, k=20, interleaved=False, maxtime=14*us, name='optimize zpulse', stats=600, plot=True, save=False, noisy=False):
 
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
     rbClass = rb.RBClifford(2, False)
@@ -1831,7 +1997,7 @@ def optimize_zpulse_gate(Sample, measure=(0,1), factor=[0.1,0.1,0.1,0.1], test_n
     data = sweeps.grid(func, axes, dataset=dataset, save=False, noisy=noisy)
     probality_init = np.mean(data[:,2][:k])
 
-    if probality_init < 0.5:
+    if probality_init < 0.1:
         print 'probality_init =', probality_init
         raise Exception("init parameter is too bad")
     ms, ks, probs = dstools.format2D(data)
@@ -2044,9 +2210,6 @@ def orbitCzNM(Sample, measure=(0, 1), paramNames=['settlingAmplitudes'], interle
                          zdelt=zdelt, maxiter=maxiter, maxfun=maxfun)
 
     return output
-
-
-
 
 
 
