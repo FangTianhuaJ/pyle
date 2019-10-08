@@ -1828,7 +1828,7 @@ def f_target(CZparameter, Sample, measure=(0,1), single_m=10, k=30, interleaved=
 
     print '------------------------------'
     print 'Swapczamp is:', Swapczamp
-    print 'settlingAmplitudes is {} and settlingRates is'.format(settlingAmplitudes,settlingRates)
+    print 'settlingAmplitudes is {} and settlingRates is {}'.format(settlingAmplitudes,settlingRates)
 
     def func(server, currK):
         print("k = {k}".format(k=currK))
