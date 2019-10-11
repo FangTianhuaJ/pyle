@@ -8,7 +8,7 @@ def fit_cos_curve(data, para_guess=[1.0,1.0,0,0.0], plot=True, fourier=False, nf
 
     def func(x,p):
         amp, freq, phi, offset = p
-        return amp*np.sin(2*np.pi*freq*x+phi)+offset
+        return amp*np.cos(2*np.pi*freq*x+phi)+offset
 
     def residuals(p,y,x):
         return y-func(x,p)
