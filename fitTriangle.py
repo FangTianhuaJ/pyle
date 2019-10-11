@@ -39,7 +39,6 @@ def fit_cos_curve(data, para_guess=[1.0,1.0,0,0.0], plot=True, fourier=False, nf
 
     deps_sort = np.sort(deps)
     select_num = int(len(deps_sort)/50.0)+1
-    c = np.column_stack((indeps,deps))
     data_amp = (np.mean(deps_sort[-select_num:])-np.mean(deps_sort[:select_num]))/2.0
     data_freq = maxFreq(np.column_stack((indeps,deps)), nfftpoints)[0]
     data_phi = np.mean(deps_new_2pi)
@@ -51,7 +50,7 @@ def fit_cos_curve(data, para_guess=[1.0,1.0,0,0.0], plot=True, fourier=False, nf
         para_guess = para_guess
 
     para_fit = leastsq(residuals,para_guess,args=(deps,indeps))[0]
-    deps_fit = func(x,para_fit)
+    deps_fit = func(indeps,para_fit)
     print 'fitting parameters is: \ndata_amp={}, data_freq={}\ndata_phi={}, data_offset={}'.format(\
     	para_fit[0],para_fit[1],para_fit[2],para_fit[3])
 
