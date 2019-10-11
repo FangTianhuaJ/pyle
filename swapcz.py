@@ -1186,8 +1186,7 @@ def sq_gate_QPT(Sample, measure=0, stats=600, name='sq_gate_QPT',
     return chi
 
 
-def testCz_QPT(Sample, measure=(0, 1), swaplen=37.0*ns, swapamp=-0.35, thetaf=None, stats=1200, name='test Cz QPT', save=True, noisy=True, plot=False,
-    correct=True, tBuf=20*ns):
+def testCz_QPT(Sample, measure=(0, 1), swaplen=37.0*ns, swapamp=-0.35, thetaf=None, stats=1200, name='test Cz QPT', save=True, noisy=True, plot=False, correct=True, tBuf=20*ns):
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
     q0 = qubits[0]
     q1 = qubits[1]
@@ -1242,9 +1241,9 @@ def testCz_QPT(Sample, measure=(0, 1), swaplen=37.0*ns, swapamp=-0.35, thetaf=No
     chi_th, inRhos, outRhos = tomo.gen_ideal_chi_matrix(U, 'sigma2', tomo.octomo_ops)
     if plot:
         tg.manhattan3d(chi.real)
-        tg.manhattan3d(chi.imag)
         plt.title('the QPT fidelity is %.4f' % (
                     np.trace(np.dot(chi_th, chi)) / (np.trace(chi) * np.trace(chi_th))))
+        tg.manhattan3d(chi.imag)
     return chi
 
 # test CZ constructed by swap
@@ -1271,15 +1270,12 @@ def SwapCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=
             alg[gates.Tomography([q0, q1], qptPrepOps[n])]
             alg[gates.Sync([q0, q1])]
             alg[gates.Wait([q0], tBuf)]
-            # alg[testCZ_gate([q0, q1], length=q0['testCzlen'], G=q0['Czstrength'], phase0=q0['testCzphase'],
-            #                 phase1=q1['testCzphase'])]
-            #alg[gates.Detune([q0], tlen=q0['Swapczlen']*2, amp=q0['Swapczamp'])]
             alg[SwapCZ([q0,q1], tlen=q0['Swapczlen'], amp=q0['Swapczamp'])]
             alg[gates.Wait([q0], tBuf)]
             alg[gates.Sync([q0, q1])]
             alg[gates.Tomography([q0, q1], op)]
             alg[gates.Measure([q0, q1])]
-            alg.compile(correctXtalkZ=True, config=['q6', 'q5'])
+            alg.compile(correctXtalkZ=True, config=qubit_config)
             reqs.append(runQubits(server, alg.agents, stats, dataFormat='iqRaw'))
         reqs = yield FutureList(reqs)
         data = []
@@ -1311,6 +1307,34 @@ def SwapCz_QPT(Sample, measure=(0, 1), stats=1200, name='test Cz control', save=
                     np.trace(np.dot(chi_th, chi)) / (np.trace(chi) * np.trace(chi_th))))
     return chi
 
+def plotRBClifford(dataset, interleaved='CZ', A=None, B=None):
+    ans, probs = [], []
+    plt.figure(figsize=(8,6))
+    for loop_i in range(len(dataset)):
+        ms_i, ks_i, probs_i = dstools.format2D(dataset[loop_i])
+        prob_mean_i = np.mean(probs_i, axis=0)
+        prob_std_i = np.std(probs_i, axis=0)
+        p0 = [0.99, np.max(prob_mean_i)-np.min(prob_mean_i), np.min(prob_mean_i)]
+        ans_i = rb.fitData(ms_i, prob_mean_i, A=A, B=B, p0=p0)
+        if loop_i == 0:
+            prob = ans_i['p']
+            fmt, label, color, ecolor = 'o', 'Reference prob is '+str(round(prob,4)), 'r', 'k'
+        else:
+            prob = ans_i['p']
+            fmt, label, color, ecolor = 's', interleaved +' prob is '+str(round(prob,4)), 'y', 'g'
+        ms_i_plot = np.linspace(1, np.max(ms_i)+1, 5*len(ms_i)+1)
+        func = rb.fitFunc(ans_i['A'], ans_i['B'])[0]
+        plt.errorbar(ms_i, prob_mean_i, yerr=prob_std_i, ecolor=ecolor, fmt=fmt)
+        plt.plot(ms_i_plot, func(ms_i_plot, ans_i['p']),label=label)
+        plt.legend(loc=1,fontsize=10)
+        plt.xlabel("m - number of Cliffords")
+        plt.ylabel("Sequence Fidelity")
+        ans.append(ans_i)
+        probs.append(prob)
+    fidelity = 1-0.75*(1-probs[1]/probs[0])
+    plt.title(interleaved+' gate fidelity is '+str(round(fidelity,4)))
+    plt.tight_layout()
+    return ans
 
 def plot_QPT(dataset, Sample, measure=(0, 1), correct=True, plot=True, U=None):
     sample, devs, qubits, Qubits = gc.loadQubits(Sample, measure, True)
@@ -1338,6 +1362,8 @@ def plot_QPT(dataset, Sample, measure=(0, 1), correct=True, plot=True, U=None):
     chi_th, inRhos, outRhos = tomo.gen_ideal_chi_matrix(U, 'sigma2', tomo.octomo_ops)
     if plot:
         tg.manhattan3d(chi.real)
+        plt.title('the QPT fidelity is %.4f' % (
+                    np.trace(np.dot(chi_th, chi)) / (np.trace(chi) * np.trace(chi_th))))
         tg.manhattan3d(chi.imag)
         tg.manhattan3d(chi_th.real)
         tg.manhattan3d(chi_th.imag)
@@ -1777,7 +1803,7 @@ def testCZ_randomizedBenchmarking(Sample, measure=(0,1), m_max=50, m_points=30 ,
     def func(server, currM, currK):
         print("m = {m}, k = {k}".format(m=currM, k=currK))
         gate_list = getSequence(currM)
-        print gate_list
+        # print gate_list
         alg = gc.Algorithm(devs)
         q0 = alg.q0
         q1 = alg.q1
@@ -1886,6 +1912,11 @@ def nelder_mead_cz(Sample, measure=(0,1), single_m=10, k=30, name='test nelder-m
         response.append([x, score])
     # simplex iter
     iters = 0
+    plt.ion()
+    fig = plt.figure()
+    ax = fig.add_subplot(1,1,1)
+    ax.set_ylabel('fidelity')
+    ax.set_xlabel('iterations')
     while 1:
         # order
         response.sort(key=lambda x: x[1])
@@ -1893,8 +1924,13 @@ def nelder_mead_cz(Sample, measure=(0,1), single_m=10, k=30, name='test nelder-m
         # break after max_iter
         if max_iter and iters >= max_iter:
             print 'maximum number of iterations has been reached'
-            return response[0]
+            if save or update:
+                f_target(CZparameter=response[0][0], Sample=Sample, measure=measure, single_m=single_m, k=k,
+                    interleaved=interleaved, name=name, save=save, update=update)
+            return 1-response[0]
         iters += 1
+        ax.plot(iters,1-best,'o',color='k')
+        plt.pause(0.1)
         # break after max_attempts iterations with no improvement
         time.sleep(0.1)
         print('\033[1;35;1m best probs_fit value of cz so far: {} \033[0m').format(1-best)
@@ -1912,7 +1948,7 @@ def nelder_mead_cz(Sample, measure=(0,1), single_m=10, k=30, name='test nelder-m
             if save or update:
                 f_target(CZparameter=response[0][0], Sample=Sample, measure=measure, single_m=single_m, k=k,
                     interleaved=interleaved, name=name, save=save, update=update)
-            return response[0]
+            return 1-response[0]
 
         # centroid
         x0 = [0.0] * dim
@@ -1958,7 +1994,7 @@ def nelder_mead_cz(Sample, measure=(0,1), single_m=10, k=30, name='test nelder-m
             score = f_target(CZparameter=xi, Sample=Sample, measure=measure, single_m=single_m, k=k, interleaved=interleaved)
             nresponse.append([xi, score])
         response = nresponse
-
+    plt.ioff()
 
 
 def optimize_zpulse_gate(Sample, measure=(0,1), factor=[0.1,0.1,0.1,0.1], test_num=10, corrrection=True, error=0.1, m_max=20, m_points=3, k=20, interleaved=False, maxtime=14*us, name='optimize zpulse', stats=600, plot=True, save=False, noisy=False):
@@ -3112,5 +3148,3 @@ if __name__ == '__main__':
     plt.plot(T, pulse(T))
     #np.savetxt('tesCZdata.txt',np.vstack((T,pulse(T))).T)
     plt.show()
-
-
