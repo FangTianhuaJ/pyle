@@ -304,10 +304,8 @@ def nelder_mead(f, x_start, step=[0.1,0.1,0.1], error=10e-6, max_attempts=20, ma
 
 if __name__ == '__main__':
     init = np.hstack([uwx(T),uwy(T)])
-    # inita = np.loadtxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt')
     #xnew = find_optimize(phi_cost_xy, x=init, maxloop=20, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
     xnew = nelder_mead(phi_cost_xy, init, step=0.1*np.ones(len(init)), error=10e-8, max_attempts=500, max_iter=1000)[0]
-    # np.savetxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt',np.vstack(np.real(xnew).T))
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     ax.plot(T,np.real(xnew[0:len(init)/2]),label='xt')
