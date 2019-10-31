@@ -13,13 +13,99 @@ import pylesim.plotting as pyplt
 # gloable parameters
 T1, T2 = float('inf'), float('inf')  # coherence time
 nonlin = -0.24  # GHz
+
 T = np.arange(0.0,21,1)  # evolution time [ns]
 length = (T[-1]-T[0])
 uwx = 2*np.pi*env.cosine(t0=(T[0]+T[-1])/2.0, w=length, amp=1.0/length, phase=0.0)
 uwy = 0.5/(nonlin*2*np.pi)*env.deriv(uwx)  # drag
 
+class Two_qubit_freq(object):
+    def __init__(self, start=None, end=None, step=None):
+        self.start = start
+        self.end = end
+        self.step = step    
+
+    def f10A(self, t0=-float('inf'), t1=float('inf'), z=5.66):
+        def timeFunc(t):
+            za = z*(t>t0)*(t<t1)
+            return za
+        return Envelope(timeFunc, start=t0, end=t1)
+
+    def f10B(self, t0=-float('inf'), t1=float('inf'), z=5.24):
+        def timeFunc(t):
+            za = z*(t>t0)*(t<t1)
+            return za
+        return Envelope(timeFunc, start=t0, end=t1)
+
+    def zpulse(self, t0=None, tf=None, z=None):
+        def timeFunc(t):
+            za = z*(t>=t0)*(t<=t0+tf)
+            return za
+        return Envelope(timeFunc, start=t0, end=t0+tf)
+
+def sim_1qubit_phi(dt=T[1]-T[0], U_target=np.array([[0,-1j],[-1j,0]])):
+    q0 = sim.Qubit2(T1=T1, T2=T2)
+    cosine = env.cosine(t0=10.0, amp=1.0/20.0, w=20.0)
+    q0.uw = cosine
+    sigmaI = np.diag([1,1])
+    Ut = sigmaI
+    for loop_t in range(len(T)):
+        Ut_loop_t = expm(-1j*q0.H(T[loop_t])*dt)
+        Ut = np.dot(Ut, Ut_loop_t)
+    TrU = np.trace(np.dot(U_target.T.conjugate(),Ut))
+    phi = np.real(0.25*TrU*TrU.conjugate())
+    print 'phi =', phi
+    return phi 
+
+def cz_phase(S=0.01*2, subspace=False, plot=False, delay=np.arange(0,50/np.sqrt(2),0.1)):
+    dt = delay[1]-delay[0]
+    q0 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
+    q1 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
+    c12 = sim.Coupler(q0,q1,s=S)
+    system = sim.QuantumSystem([q0,q1],[c12])
+    psi0 = np.array([0,0,0,0,1+0j,0,0,0,0])
+    q0.df = Two_qubit_freq().f10A(z=5.66)
+    q1.df = Two_qubit_freq().f10B(z=5.24)
+    q0.df += Two_qubit_freq().zpulse(t0=delay[0], tf=delay[-1], z=-0.18)
+    rhos0 = system.simulate(psi0, delay, method='fast')
+    P11 = rhos0[:, 4][:, 4]
+    P20 = rhos0[:, 6][:, 6]
+    natural_phase = []
+    if not subspace:
+        sigmaI = np.diag([1,1,1,1,1,1,1,1,1])
+        Ut = sigmaI
+        for loop_t in range(len(delay)):
+            natural_phase_loop_t = 2*np.pi*(q0.df(delay[loop_t])+q1.df(delay[loop_t]))*dt
+            natural_phase.append(natural_phase_loop_t)
+            Ut_loop_t = expm(-1j*system.H(delay[loop_t])*dt)
+            Ut = np.dot(Ut, Ut_loop_t)
+        dynamic_phase = np.angle(np.dot(Ut,psi0)[4])
+    if subspace:
+        sigmaI = np.diag([1,1])
+        Ut_sub = sigmaI
+        psi0_sub = np.array([1+0j,0])
+        for loop_t in range(len(delay)):
+            H_loop_t = system.H(delay[loop_t])
+            Hm = np.delete(H_loop_t,(0,1,2,3,5,7,8),axis=0)
+            H_loop_t_sub = np.delete(Hm,(0,1,2,3,5,7,8),axis=1)
+            Ut_loop_t_sub = expm(-1j*H_loop_t_sub*dt)
+            Ut_sub = np.dot(Ut_sub, Ut_loop_t_sub)
+            natural_phase_loop_t = 2*np.pi*(q0.df(delay[loop_t])+q1.df(delay[loop_t]))*dt
+            natural_phase.append(natural_phase_loop_t)
+        dynamic_phase = np.angle(np.dot(Ut_sub,psi0_sub)[0])
+    natural_phase_all = sum(natural_phase)
+    natural_phase_reduce = divmod(natural_phase_all,2*np.pi)[1]
+    extra_phase = dynamic_phase+natural_phase_reduce
+    print 'extra_phase =', extra_phase
+    if plot:
+        plt.xlabel('time[ns]')
+        plt.ylabel('P11')
+        plt.plot(delay,P11)
+        plt.show()
+    return extra_phase 
+
 def loss(x):
-    return (x[0]-1.0)**2+(x[1]-2.0)**2
+    return ((x[0]-1.0)**2+(x[1]-2.0)**2+(x[2]-3.0)**2)**2
 
 def drag_correct_3level(variable=[0.5,0.0], t0=10, w=20.0, step=0.1, phase=0, bloch=False):
     alpha, deltaf = variable[0], variable[1]
@@ -85,8 +171,8 @@ def phi_2level(x=None, t=T, U_target=np.array([[0,-1j],[-1j,0]]), t0=0, N=20, la
         Ut_loop_t = expm(-1j*Ht_loop_t*dt)
         Ut = np.dot(Ut, Ut_loop_t)
         Ht.append(Ht_loop_t)
-    TrU = np.trace(np.dot(U_target.T.conj(),Ut))
-    phi = np.real(0.25*TrU*TrU.conj())
+    TrU = np.trace(np.dot(U_target.T.conjugate(),Ut))
+    phi = np.real(0.25*TrU*TrU.conjugate())
     # print 'phi =', phi
     if plot:
         plt.plot(t,xt)
@@ -116,9 +202,9 @@ def phi_cost_xy(x=None, t=T, U_target=np.array([[0,-1j,0],[-1j,0,0],[0,0,0]]), t
         Ut = np.dot(Ut, Ut_loop_t)
         Ht.append(Ht_loop_t)
     Ut_sub = np.dot(projection,Ut)
-    U_target_new_sub = np.dot(projection,U_target.T.conj())
+    U_target_new_sub = np.dot(projection,U_target.T.conjugate())
     TrU = np.trace(np.dot(U_target_new_sub,Ut_sub))
-    phi = np.real(0.25*TrU*TrU.conj())
+    phi = np.real(0.25*TrU*TrU.conjugate())
     # print 'phi =', phi
     if plot:
         plt.plot(t,xt,t,yt)
@@ -137,9 +223,9 @@ def phi_cost_xyz(x=None, t=T, U_target=np.array([[0,-1j,0],[-1j,0,0],[0,0,0]]), 
     xt,yt,zt = np.zeros(len(t)),np.zeros(len(t)),np.zeros(len(t))
     scope1, scope2, scope3 = range(len(x)/3), range(len(x)/3,2*len(x)/3), range(2*len(x)/3,len(x))
     for i,j,k in zip(scope1,scope2,scope3):
-        xti = x[i]*(t0<=t)*(t<t0+dt)
-        ytj = x[j]*(t0<=t)*(t<t0+dt)
-        ztk = x[k]*(t0<=t)*(t<t0+dt)
+        xti = x[i]*(t0-dt/2.0<=t)*(t<t0+dt/2.0)
+        ytj = x[j]*(t0-dt/2.0<=t)*(t<t0+dt/2.0)
+        ztk = x[k]*(t0-dt/2.0<=t)*(t<t0+dt/2.0)
         t0 += dt
         xt, yt, zt = xt+xti, yt+ytj, zt+ztk
     Ut = sigmaI
@@ -149,9 +235,9 @@ def phi_cost_xyz(x=None, t=T, U_target=np.array([[0,-1j,0],[-1j,0,0],[0,0,0]]), 
         Ut = np.dot(Ut, Ut_loop_t)
         Ht.append(Ht_loop_t)
     Ut_sub = np.dot(projection,Ut)
-    U_target_new_sub = np.dot(projection,U_target.T.conj())
+    U_target_new_sub = np.dot(projection,U_target.T.conjugate())
     TrU = np.trace(np.dot(U_target_new_sub,Ut_sub))
-    phi = np.real(0.25*TrU*TrU.conj())
+    phi = np.real(0.25*TrU*TrU.conjugate())
     # print 'phi =', phi
     if plot:
         plt.plot(t,xt,t,yt,t,zt)
@@ -162,7 +248,6 @@ def gradient_descense(f, x, step=0.01, num=10, adapt_step=False):
     alpha = 1e-5
     gradients = np.zeros(x.shape)
     gradient_new = []
-
     for loop_i in range(len(gradients)): 
         delta_vector = np.zeros(x.shape)
         delta_vector[loop_i] = alpha
@@ -183,7 +268,6 @@ def gradient_descense(f, x, step=0.01, num=10, adapt_step=False):
             power_loop_i_new = float(np.mean(power_loop_i))
             gradient_loop_i_new = np.sign(gradients[loop_i])*np.sqrt(np.abs(gradients[loop_i]))**(1.0/power_loop_i_new)
             gradient_new.append(gradient_loop_i_new)
-
     if adapt_step:
         gradient_new = np.array(gradient_new)
         return x - gradient_new * step
@@ -303,9 +387,12 @@ def nelder_mead(f, x_start, step=[0.1,0.1,0.1], error=10e-6, max_attempts=20, ma
         response = nresponse
 
 if __name__ == '__main__':
+    # cz_phase(subspace=True)
     init = np.hstack([uwx(T),uwy(T)])
-    #xnew = find_optimize(phi_cost_xy, x=init, maxloop=20, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
-    xnew = nelder_mead(phi_cost_xy, init, step=0.1*np.ones(len(init)), error=10e-8, max_attempts=500, max_iter=1000)[0]
+    #inita = np.loadtxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt')
+    xnew = find_optimize(phi_cost_xy, x=init, maxloop=50, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
+    #xnew = nelder_mead(phi_cost_xy, init, step=0.1*np.ones(len(init)), error=10e-8, max_attempts=50, max_iter=100)[0]
+    #np.savetxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt',np.vstack(np.real(xnew).T))
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     ax.plot(T,np.real(xnew[0:len(init)/2]),label='xt')
