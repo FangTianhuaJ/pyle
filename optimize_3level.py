@@ -15,9 +15,10 @@ T1, T2 = float('inf'), float('inf')  # coherence time
 nonlin = -0.24  # GHz
 
 T = np.arange(0.0,21,1)  # evolution time [ns]
+swaplen = np.arange(0,50.0/np.sqrt(2),1.0)
 length = (T[-1]-T[0])
 uwx = 2*np.pi*env.cosine(t0=(T[0]+T[-1])/2.0, w=length, amp=1.0/length, phase=0.0)
-uwy = 0.5/(nonlin*2*np.pi)*env.deriv(uwx)  # drag
+uwy = -0.5/(nonlin*2*np.pi)*env.deriv(uwx)  # drag
 
 class Two_qubit_freq(object):
     def __init__(self, start=None, end=None, step=None):
@@ -43,6 +44,30 @@ class Two_qubit_freq(object):
             return za
         return Envelope(timeFunc, start=t0, end=t0+tf)
 
+    def numerical_pulse(self, x=None, T=None, t0=None, tf=None):
+        def timeFunc(t,T=T):
+            dt = T[1]-T[0]
+            if isinstance(t,int) or isinstance(t,float):
+                if T[0] <= t <= T[-1]:
+                    dt = T[1]-T[0]
+                    i = int(np.floor((t-T[0])/dt))
+                    # print 'i =', i
+                    return x[i]
+                else:
+                    return 0
+            elif isinstance(t,list) or isinstance(t,np.ndarray):
+                xt = []
+                for i in range(len(t)):
+                    if T[0] <= t[i] <= T[-1]:
+                        indexi = int(np.floor((t[i]-T[0])/dt))
+                        xi = x[indexi]
+                        xt.append(xi)
+                    else:
+                        xi = 0
+                        xt.append(xi)
+                return xt
+        return Envelope(timeFunc, start=t0, end=t0+tf)
+
 def sim_1qubit_phi(dt=T[1]-T[0], U_target=np.array([[0,-1j],[-1j,0]])):
     q0 = sim.Qubit2(T1=T1, T2=T2)
     cosine = env.cosine(t0=10.0, amp=1.0/20.0, w=20.0)
@@ -51,13 +76,14 @@ def sim_1qubit_phi(dt=T[1]-T[0], U_target=np.array([[0,-1j],[-1j,0]])):
     Ut = sigmaI
     for loop_t in range(len(T)):
         Ut_loop_t = expm(-1j*q0.H(T[loop_t])*dt)
-        Ut = np.dot(Ut, Ut_loop_t)
+        Ut = np.dot(Ut_loop_t, Ut)
     TrU = np.trace(np.dot(U_target.T.conjugate(),Ut))
     phi = np.real(0.25*TrU*TrU.conjugate())
     print 'phi =', phi
     return phi 
-
-def cz_phase(S=0.01*2, subspace=False, plot=False, delay=np.arange(0,50/np.sqrt(2),0.1)):
+ 
+def cz_phase(x=-0.18*np.ones(len(swaplen)), S=0.01*2, plot=False, delay=swaplen):
+    U_target = np.diag([1,1,1,-1])
     dt = delay[1]-delay[0]
     q0 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
     q1 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
@@ -66,43 +92,44 @@ def cz_phase(S=0.01*2, subspace=False, plot=False, delay=np.arange(0,50/np.sqrt(
     psi0 = np.array([0,0,0,0,1+0j,0,0,0,0])
     q0.df = Two_qubit_freq().f10A(z=5.66)
     q1.df = Two_qubit_freq().f10B(z=5.24)
-    q0.df += Two_qubit_freq().zpulse(t0=delay[0], tf=delay[-1], z=-0.18)
-    rhos0 = system.simulate(psi0, delay, method='fast')
-    P11 = rhos0[:, 4][:, 4]
-    P20 = rhos0[:, 6][:, 6]
-    natural_phase = []
-    if not subspace:
-        sigmaI = np.diag([1,1,1,1,1,1,1,1,1])
-        Ut = sigmaI
-        for loop_t in range(len(delay)):
-            natural_phase_loop_t = 2*np.pi*(q0.df(delay[loop_t])+q1.df(delay[loop_t]))*dt
-            natural_phase.append(natural_phase_loop_t)
-            Ut_loop_t = expm(-1j*system.H(delay[loop_t])*dt)
-            Ut = np.dot(Ut, Ut_loop_t)
-        dynamic_phase = np.angle(np.dot(Ut,psi0)[4])
-    if subspace:
-        sigmaI = np.diag([1,1])
-        Ut_sub = sigmaI
-        psi0_sub = np.array([1+0j,0])
-        for loop_t in range(len(delay)):
-            H_loop_t = system.H(delay[loop_t])
-            Hm = np.delete(H_loop_t,(0,1,2,3,5,7,8),axis=0)
-            H_loop_t_sub = np.delete(Hm,(0,1,2,3,5,7,8),axis=1)
-            Ut_loop_t_sub = expm(-1j*H_loop_t_sub*dt)
-            Ut_sub = np.dot(Ut_sub, Ut_loop_t_sub)
-            natural_phase_loop_t = 2*np.pi*(q0.df(delay[loop_t])+q1.df(delay[loop_t]))*dt
-            natural_phase.append(natural_phase_loop_t)
-        dynamic_phase = np.angle(np.dot(Ut_sub,psi0_sub)[0])
+    #q0.df += Two_qubit_freq().zpulse(t0=delay[0], tf=delay[-1], z=-0.18)
+    q0.df += Two_qubit_freq().numerical_pulse(x=x, T=delay, t0=delay[0], tf=delay[-1])
+    natural_phase1,natural_phase2,natural_phase = [],[],[]
+    sigmaI = np.diag([1,1,1,1,1,1,1,1,1])
+    Ut = sigmaI
+    for loop_t in range(len(delay)):
+        natural_phase1_loop_t = 2*np.pi*q0.df(delay[loop_t])*dt
+        natural_phase2_loop_t = 2*np.pi*q1.df(delay[loop_t])*dt
+        natural_phase_loop_t = 2*np.pi*(q0.df(delay[loop_t])+q1.df(delay[loop_t]))*dt
+        natural_phase1.append(natural_phase1_loop_t)
+        natural_phase2.append(natural_phase2_loop_t)
+        natural_phase.append(natural_phase_loop_t)
+        Ut_loop_t = expm(-1j*system.H(delay[loop_t])*dt)
+        Ut = np.dot(Ut_loop_t, Ut)
+    dynamic_phase = np.angle(np.dot(Ut,psi0)[4])
+    natural_phase1_all,natural_phase2_all = sum(natural_phase1),sum(natural_phase2)
     natural_phase_all = sum(natural_phase)
     natural_phase_reduce = divmod(natural_phase_all,2*np.pi)[1]
     extra_phase = dynamic_phase+natural_phase_reduce
-    print 'extra_phase =', extra_phase
+    #print 'extra_phase =', extra_phase
+    Ut_subm = np.delete(Ut,(2,5,6,7,8),axis=0)
+    Ut_sub = np.delete(Ut_subm,(2,5,6,7,8),axis=1)
+    Ut_sub[1][1] = Ut_sub[1][1]*np.exp(1j*natural_phase2_all)
+    Ut_sub[2][2] = Ut_sub[2][2]*np.exp(1j*natural_phase1_all)
+    Ut_sub[3][3] = Ut_sub[3][3]*np.exp(1j*natural_phase_all)
+    #print 'Ut_sub =', Ut_sub
+    TrU = np.trace(np.dot(U_target.T.conjugate(),Ut_sub))
+    phi = np.real(1.0/16.0*TrU*TrU.conjugate())
+    # print 'phi =', phi
     if plot:
+        rhos0 = system.simulate(psi0, delay, method='fast')
+        P11 = rhos0[:, 4][:, 4]
+        P20 = rhos0[:, 6][:, 6]
         plt.xlabel('time[ns]')
         plt.ylabel('P11')
         plt.plot(delay,P11)
         plt.show()
-    return extra_phase 
+    return 1-phi 
 
 def loss(x):
     return ((x[0]-1.0)**2+(x[1]-2.0)**2+(x[2]-3.0)**2)**2
@@ -169,7 +196,7 @@ def phi_2level(x=None, t=T, U_target=np.array([[0,-1j],[-1j,0]]), t0=0, N=20, la
     for loop_t in range(len(t)):
         Ht_loop_t = xt[loop_t]*Hx+yt[loop_t]*Hy
         Ut_loop_t = expm(-1j*Ht_loop_t*dt)
-        Ut = np.dot(Ut, Ut_loop_t)
+        Ut = np.dot(Ut_loop_t, Ut)
         Ht.append(Ht_loop_t)
     TrU = np.trace(np.dot(U_target.T.conjugate(),Ut))
     phi = np.real(0.25*TrU*TrU.conjugate())
@@ -199,7 +226,7 @@ def phi_cost_xy(x=None, t=T, U_target=np.array([[0,-1j,0],[-1j,0,0],[0,0,0]]), t
     for loop_t in range(len(t)):
         Ht_loop_t = Hd+xt[loop_t]*Hx+yt[loop_t]*Hy+zt[loop_t]*Hz
         Ut_loop_t = expm(-1j*Ht_loop_t*dt)
-        Ut = np.dot(Ut, Ut_loop_t)
+        Ut = np.dot(Ut_loop_t, Ut)
         Ht.append(Ht_loop_t)
     Ut_sub = np.dot(projection,Ut)
     U_target_new_sub = np.dot(projection,U_target.T.conjugate())
@@ -232,13 +259,12 @@ def phi_cost_xyz(x=None, t=T, U_target=np.array([[0,-1j,0],[-1j,0,0],[0,0,0]]), 
     for loop_t in range(len(t)):
         Ht_loop_t = Hd+xt[loop_t]*Hx+yt[loop_t]*Hy+zt[loop_t]*Hz
         Ut_loop_t = expm(-1j*Ht_loop_t*dt)
-        Ut = np.dot(Ut, Ut_loop_t)
+        Ut = np.dot(Ut_loop_t, Ut)
         Ht.append(Ht_loop_t)
     Ut_sub = np.dot(projection,Ut)
     U_target_new_sub = np.dot(projection,U_target.T.conjugate())
     TrU = np.trace(np.dot(U_target_new_sub,Ut_sub))
     phi = np.real(0.25*TrU*TrU.conjugate())
-    # print 'phi =', phi
     if plot:
         plt.plot(t,xt,t,yt,t,zt)
         plt.show()
@@ -387,17 +413,10 @@ def nelder_mead(f, x_start, step=[0.1,0.1,0.1], error=10e-6, max_attempts=20, ma
         response = nresponse
 
 if __name__ == '__main__':
-    # cz_phase(subspace=True)
-    init = np.hstack([uwx(T),uwy(T)])
-    #inita = np.loadtxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt')
-    xnew = find_optimize(phi_cost_xy, x=init, maxloop=50, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
-    #xnew = nelder_mead(phi_cost_xy, init, step=0.1*np.ones(len(init)), error=10e-8, max_attempts=50, max_iter=100)[0]
-    #np.savetxt('C:/Users/ZhiWen Zong/Desktop/NMGD/init.txt',np.vstack(np.real(xnew).T))
-    fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
-    ax.plot(T,np.real(xnew[0:len(init)/2]),label='xt')
-    ax.plot(T,np.real(xnew[len(init)/2:len(init)]),label='yt')
-    ax.scatter(T,np.real(uwx(T)),label='initx')
-    ax.scatter(T,np.real(uwy(T)),label='inity')
-    ax.legend()
+    init = -0.18*np.ones(len(swaplen))
+    inita = np.loadtxt('D:/NMGD/init.txt')
+    xnew = find_optimize(cz_phase, x=inita, maxloop=20, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
+    #xnew = nelder_mead(cz_phase, init1, step=0.1*np.ones(len(init1)), error=10e-6, max_attempts=200, max_iter=800)[0]
+    np.savetxt('D:/NMGD/init.txt',np.vstack(np.real(xnew).T))
+    plt.bar(swaplen, np.real(xnew))
     plt.show()
