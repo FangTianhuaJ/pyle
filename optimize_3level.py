@@ -6,19 +6,27 @@ from pylesim import envelopes as env
 import matplotlib.pyplot as plt
 import random
 from scipy.linalg import expm
+from pyle.fitting import fitting
 import time
 from pylesim.envelopes import Envelope
 import pylesim.plotting as pyplt
+from scipy.optimize import leastsq
 
 # gloable parameters
 T1, T2 = float('inf'), float('inf')  # coherence time
+coups = 0.01 #coupling strength [GHz]
 nonlin = -0.24  # GHz
+DecayTime1 ,DecayTime2 = 18.0, 260.0 # zpulse compensation time [ns]
+DecayAmp1, DecayAmp2 = -0.1, -0.02 # zpulse compensation amp [ns]
 
+# single qubit evolution 
 T = np.arange(0.0,21,1)  # evolution time [ns]
-swaplen = np.arange(0,50.0/np.sqrt(2),1.0)
 length = (T[-1]-T[0])
 uwx = 2*np.pi*env.cosine(t0=(T[0]+T[-1])/2.0, w=length, amp=1.0/length, phase=0.0)
 uwy = -0.5/(nonlin*2*np.pi)*env.deriv(uwx)  # drag
+
+# two qubits evolution
+swaplen = np.arange(0,(1/coups)/(2*np.sqrt(2)),0.1)
 
 class Two_qubit_freq(object):
     def __init__(self, start=None, end=None, step=None):
@@ -42,6 +50,13 @@ class Two_qubit_freq(object):
         def timeFunc(t):
             za = z*(t>=t0)*(t<=t0+tf)
             return za
+        return Envelope(timeFunc, start=t0, end=t0+tf)
+
+    def zpulse_with_filter(self, t0=None, tf=None, z=None, tau1=20, tau2=200, amp1=-0.05, amp2=-0.02):
+        def timeFunc(t):
+            za = z*(t>=t0)*(t<=t0+tf)
+            zb = (amp1*np.exp(-t/tau1)+amp2*np.exp(-t/tau2))*(t>=t0)*(t<=t0+tf)
+            return za+zb
         return Envelope(timeFunc, start=t0, end=t0+tf)
 
     def numerical_pulse(self, x=None, T=None, t0=None, tf=None):
@@ -68,6 +83,78 @@ class Two_qubit_freq(object):
                 return xt
         return Envelope(timeFunc, start=t0, end=t0+tf)
 
+    def czpulse(self, x=np.array([-0.18,-0.0,-0.0,-0.0,-0.0,-0.0,-0.0]), t0=0.0, tgate=(1/coups)/(2*np.sqrt(2))):
+        x0, x1, x2, x3, x4, x5, x6 = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
+        def timeFunc(t):
+            z = (x0+x1*np.sin(np.pi*t/tgate)+x2*np.cos(np.pi*t/tgate)+x3*np.sin(2*np.pi*t/tgate)\
+                +x4*np.cos(2*np.pi*t/tgate)+x5*np.sin(4*np.pi*t/tgate)\
+                +x6*np.cos(4*np.pi*t/tgate))*(t>=t0)*(t<=t0+tgate)
+            return z
+        return Envelope(timeFunc, start=t0, end=t0+tgate)
+
+def fit_exp(data, para_guess=[1.0,1.0,1.0,1.0], plot=True):
+    def func(x,p):
+        amp1, tau1, amp2, tau2, offset = p
+        return amp1*np.exp(-x/tau1)+amp2*np.exp(-x/tau2)+offset
+    def residuals(p,y,x):
+        return y-func(x,p)
+    indeps, deps = data[0], data[1]
+    para_fit = leastsq(residuals,para_guess,args=(deps,indeps))[0]
+    deps_fit = func(indeps,para_fit)
+    print 'fitting parameters is: \n[amp1={}, tau1={}, amp2={}, tau2={}, offset={}]'.format(\
+        para_fit[0],para_fit[1],para_fit[2],para_fit[3],para_fit[4])
+    print 'decayTime1 = {}, decayTime2 = {}'.format(para_fit[1], para_fit[3])
+    if plot:
+        plt.figure(figsize=(8,6))
+        plt.scatter(indeps,deps,color="red",label="Init data",linewidth=3) 
+        plt.plot(indeps,deps_fit,color="orange",label="Fitting line",linewidth=2) 
+        plt.legend(loc=1)
+        plt.show()
+    return para_fit
+
+def zpulse_ramsey(delay=np.arange(0,200,1), zamp=-1.0, order=2, tau1_guess=20, tau2_guess=300, amp2_to_all=0.2, fit=True):
+    q0 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
+    psi0 = np.array([1+0j,1+0j,0])/np.sqrt(2)  # X/2
+    q0.df = Two_qubit_freq().f10A(z=0.0)
+    q0.df += Two_qubit_freq().zpulse_with_filter(t0=delay[0], tf=delay[-1], z=zamp, tau1=DecayTime1, tau2=DecayTime2, amp1=DecayAmp1, amp2=DecayAmp2)
+    system = sim.QuantumSystem([q0])
+    rhos = system.simulate(psi0, delay, method='fast')
+    rhos0 = rhos[:,0:2,0:2]
+    phase = []
+    for i, rho in enumerate(rhos0):
+        nature_phasei = -2*np.pi*zamp*delay[i]
+        phasei = np.angle(rho[0, 1])
+        phase.append(phasei-nature_phasei)
+    phase = np.unwrap(phase)
+    phaseToFit = phase.copy()
+    data = [delay,phase]
+    if fit:
+        if order == 1:
+            amp = phaseToFit[0] - phaseToFit[-1]
+            tau = tau1_guess
+            offset = phaseToFit[-1]
+            para_guess = [amp, tau, offset]
+            v, cov, fitFunc = fitting.fitCurve('exponential', delay, phaseToFit, para_guess)
+            phase_Fit = fitFunc(delay, *v)
+            decayTime = v[1]
+            print 'decayTime =', decayTime
+            plt.plot(delay, phase, 'o', label='data')
+            plt.plot(delay, phase_Fit, '-', label='fit')
+            plt.xlabel('Ramsey Delay [ns]')
+            plt.ylabel('Ramsey Phase')
+            plt.show()
+        elif order == 2:
+            amp1 = (1-amp2_to_all)*(phaseToFit[0] - phaseToFit[-1])
+            tau1 = tau1_guess
+            amp2 = amp2_to_all*(phaseToFit[0] - phaseToFit[-1])
+            tau2 = tau2_guess
+            offset = phaseToFit[-1]
+            para_guess = [amp1, tau1, amp2, tau2, offset]
+            Amp1, Tau1, Amp2, Tau2, Offset = fit_exp(data, para_guess=para_guess, plot=True)
+        else:
+            pass
+    return data
+
 def sim_1qubit_phi(dt=T[1]-T[0], U_target=np.array([[0,-1j],[-1j,0]])):
     q0 = sim.Qubit2(T1=T1, T2=T2)
     cosine = env.cosine(t0=10.0, amp=1.0/20.0, w=20.0)
@@ -82,7 +169,7 @@ def sim_1qubit_phi(dt=T[1]-T[0], U_target=np.array([[0,-1j],[-1j,0]])):
     print 'phi =', phi
     return phi 
  
-def cz_phase(x=-0.18*np.ones(len(swaplen)), S=0.01*2, plot=False, delay=swaplen):
+def cz_phase(x=np.array([-0.18,-0.0,-0.0,-0.0,-0.0,-0.0,-0.0]), S=coups*2, plot=False, delay=swaplen):
     U_target = np.diag([1,1,1,-1])
     dt = delay[1]-delay[0]
     q0 = sim.Qubit3(T1=T1, T2=T2, nonlin=nonlin)
@@ -92,8 +179,9 @@ def cz_phase(x=-0.18*np.ones(len(swaplen)), S=0.01*2, plot=False, delay=swaplen)
     psi0 = np.array([0,0,0,0,1+0j,0,0,0,0])
     q0.df = Two_qubit_freq().f10A(z=5.66)
     q1.df = Two_qubit_freq().f10B(z=5.24)
+    q0.df += Two_qubit_freq().czpulse(x=x, t0=delay[0], tgate=delay[-1])
     #q0.df += Two_qubit_freq().zpulse(t0=delay[0], tf=delay[-1], z=-0.18)
-    q0.df += Two_qubit_freq().numerical_pulse(x=x, T=delay, t0=delay[0], tf=delay[-1])
+    #q0.df += Two_qubit_freq().numerical_pulse(x=x, T=delay, t0=delay[0], tf=delay[-1])
     natural_phase1,natural_phase2,natural_phase = [],[],[]
     sigmaI = np.diag([1,1,1,1,1,1,1,1,1])
     Ut = sigmaI
@@ -412,11 +500,6 @@ def nelder_mead(f, x_start, step=[0.1,0.1,0.1], error=10e-6, max_attempts=20, ma
             nresponse.append([xi, score])
         response = nresponse
 
+
 if __name__ == '__main__':
-    init = -0.18*np.ones(len(swaplen))
-    inita = np.loadtxt('D:/NMGD/init.txt')
-    xnew = find_optimize(cz_phase, x=inita, maxloop=20, epsilon=1e-6, step=0.01, adapt_step=False, adjust_size=False)[0]
-    #xnew = nelder_mead(cz_phase, init1, step=0.1*np.ones(len(init1)), error=10e-6, max_attempts=200, max_iter=800)[0]
-    np.savetxt('D:/NMGD/init.txt',np.vstack(np.real(xnew).T))
-    plt.bar(swaplen, np.real(xnew))
-    plt.show()
+    zpulse_ramsey(zamp=-1.0, order=2, tau1_guess=20, tau2_guess=300, amp2_to_all=0.2, fit=True)
